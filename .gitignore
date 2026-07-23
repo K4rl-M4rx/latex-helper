@@ -1,0 +1,17 @@
+node_modules/
+.DS_Store
+*.vsix
+
+# 本地测试文件
+test-tex/
+
+# Claude Code / AI 工具的个人配置（如需共享请移除对应行）
+.claude/settings.json
+.claude/agents/
+.claude/commands/
+.claude/hooks/
+.claude/skills/
+.agents/
+.codex/
+
+# Trellis 内部忽略规则见 .trellis/.gitignore
