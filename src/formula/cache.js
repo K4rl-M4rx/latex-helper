@@ -94,4 +94,17 @@ function readAllFromCache(formulas, cacheDir) {
     });
 }
 
-module.exports = { getCacheDir, computeHash, needsRecompile, writeCache, readAllFromCache };
+/**
+ * 清空缓存目录。
+ * @param {string} cacheDir
+ */
+function clearCache(cacheDir) {
+    if (fs.existsSync(cacheDir)) {
+        const entries = fs.readdirSync(cacheDir);
+        for (const entry of entries) {
+            fs.rmSync(path.join(cacheDir, entry), { recursive: true });
+        }
+    }
+}
+
+module.exports = { getCacheDir, computeHash, needsRecompile, writeCache, readAllFromCache, clearCache };

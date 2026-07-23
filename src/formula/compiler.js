@@ -113,6 +113,8 @@ function convertToSVG(dviPath, outputDir, pageCount) {
         const svgPattern = path.join(outputDir, 'page-%p.svg');
         const proc = spawn(dvisvgmPath, [
             '--font-format=woff2',
+            '--zoom=-1',
+            '--exact',
             '--page=1-' + pageCount,
             '--output=' + svgPattern,
             dviPath
@@ -135,15 +137,22 @@ function convertToSVG(dviPath, outputDir, pageCount) {
                 ));
                 return;
             }
-            const svgs = [];
-            for (let i = 1; i <= pageCount; i++) {
-                const svgFile = path.join(outputDir, `page-${i}.svg`);
+            // dvisvgm 在页数较多时会自动补零（page-001.svg），不能假定固定格式。
+            // 通过列出目录解析实际文件名，按页码排序读取。
+            const pageFiles = fs.readdirSync(outputDir)
+                .filter(f => /^page-\d+\.svg$/.test(f))
+                .sort((a, b) => {
+                    const na = parseInt(a.match(/page-(\d+)\.svg$/)[1], 10);
+                    const nb = parseInt(b.match(/page-(\d+)\.svg$/)[1], 10);
+                    return na - nb;
+                });
+            const svgs = pageFiles.map(f => {
                 try {
-                    svgs.push(fs.readFileSync(svgFile, 'utf-8'));
+                    return fs.readFileSync(path.join(outputDir, f), 'utf-8');
                 } catch {
-                    svgs.push('');
+                    return '';
                 }
-            }
+            });
             resolve(svgs);
         });
     });

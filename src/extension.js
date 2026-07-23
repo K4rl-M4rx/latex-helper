@@ -5,13 +5,17 @@
 const vscode = require('vscode');
 const { parseDocument, deduplicateFormulas, computeHash } = require('./formula/parser');
 const { compileFormulas, checkTool } = require('./formula/compiler');
-const { needsRecompile, getCacheDir, writeCache, readAllFromCache, computeHash: cacheHash } = require('./formula/cache');
+const { needsRecompile, getCacheDir, writeCache, readAllFromCache, computeHash: cacheHash, clearCache: clearCacheDir } = require('./formula/cache');
 const { FormulaPanelProvider } = require('./formula/panel');
+const { FormulaBrowser } = require('./formula/browser');
 const { importSnippets } = require('./snippets/importer');
 const { registerSnippetProvider } = require('./snippets/provider');
 
 /** @type {FormulaPanelProvider} */
 let panelProvider;
+
+/** @type {FormulaBrowser} */
+let formulaBrowser;
 
 /** @type {string | null} */
 let currentPreambleHash = null;
@@ -34,13 +38,27 @@ function activate(context) {
     // 初始化缓存目录
     cacheDir = getCacheDir(context);
 
-    // 注册公式面板 WebviewView Provider
+    // 注册公式面板 WebviewView Provider（侧边栏）
     panelProvider = new FormulaPanelProvider(context);
+    panelProvider._onClearCache = () => {
+        clearCacheDir(cacheDir);
+        currentPreambleHash = null;
+        panelProvider.clear();
+        formulaBrowser.clear();
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.languageId === 'latex') {
+            refreshFormulas(editor.document);
+        }
+        vscode.window.showInformationMessage('LaTeX Helper: cache cleared');
+    };
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('latex-helper.formulaPanel', panelProvider, {
             webviewOptions: { retainContextWhenHidden: true }
         })
     );
+
+    // 公式浏览器（独立 Tab）
+    formulaBrowser = new FormulaBrowser(context);
 
     // 注册 snippet 补全 Provider
     context.subscriptions.push(registerSnippetProvider(context));
@@ -54,6 +72,11 @@ function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand('latex-helper.importSnippets', async () => {
             await importSnippets(context);
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('latex-helper.showFormulaBrowser', () => {
+            formulaBrowser.show();
         })
     );
 
@@ -130,6 +153,7 @@ async function refreshFormulas(document) {
                 envType: f.envType
             }));
             panelProvider.update(panelData);
+            formulaBrowser.update(panelData);
         } else if (!needCompile && parsed.formulas.length > 0) {
             // 全部命中缓存
             const cached = readAllFromCache(allHashes, cacheDir);
@@ -142,8 +166,10 @@ async function refreshFormulas(document) {
                 envType: f.envType
             }));
             panelProvider.update(panelData);
+            formulaBrowser.update(panelData);
         } else {
             panelProvider.clear();
+            formulaBrowser.clear();
         }
 
         currentPreambleHash = parsed.preambleHash;
