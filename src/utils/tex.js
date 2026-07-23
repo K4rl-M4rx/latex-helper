@@ -208,11 +208,32 @@ function isInMathContext(document, position) {
     return { inMath, depth };
 }
 
+/**
+ * 查找所有节标题（\section, \subsection, \subsubsection）。
+ * @param {string} text
+ * @returns {Array<{title: string, level: number, line: number}>}
+ */
+function findSections(text) {
+    const results = [];
+    const re = /\\(section|subsection|subsubsection)\{([^}]*)\}/g;
+    let match;
+    while ((match = re.exec(text)) !== null) {
+        const levelMap = { 'section': 1, 'subsection': 2, 'subsubsection': 3 };
+        results.push({
+            title: match[2],
+            level: levelMap[match[1]] || 1,
+            line: text.substring(0, match.index).split('\n').length
+        });
+    }
+    return results;
+}
+
 module.exports = {
     extractPreamble,
     findFormulaEnvironments,
     extractLabel,
     extractLabels,
     findReferences,
+    findSections,
     isInMathContext
 };

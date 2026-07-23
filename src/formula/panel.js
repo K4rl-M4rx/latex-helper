@@ -16,6 +16,8 @@ class FormulaPanelProvider {
         this._onClearCache = null;
         /** @type {((onlyRef: boolean) => void) | null} */
         this._onToggleOnlyRef = null;
+        /** @type {((value: string) => void) | null} */
+        this._onToggleGroupMode = null;
     }
 
     resolveWebviewView(webviewView, _resolveContext, _token) {
@@ -42,6 +44,11 @@ class FormulaPanelProvider {
                     case 'toggleOnlyRef':
                         if (this._onToggleOnlyRef) {
                             this._onToggleOnlyRef(message.value);
+                        }
+                        break;
+                    case 'toggleGroupMode':
+                        if (this._onToggleGroupMode) {
+                            this._onToggleGroupMode(message.value);
                         }
                         break;
                 }
@@ -153,6 +160,14 @@ function getPanelHtml(cspSource) {
         <input type="checkbox" id="only-ref-check" />
         Only referenced formulas
     </label>
+    <div class="checkbox-row" style="margin-top:8px;">
+        <span>Group by:</span>
+        <select id="group-mode-select" style="flex:1;padding:3px 6px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:2px;font-family:inherit;font-size:12px;">
+            <option value="none">None</option>
+            <option value="section">Section</option>
+            <option value="subsection">Subsection</option>
+        </select>
+    </div>
     <div class="hint">
         Click the button above to browse all labeled formulas in a separate tab with search, copy, and drag support.
     </div>
@@ -166,6 +181,9 @@ function getPanelHtml(cspSource) {
         });
         document.getElementById('only-ref-check').addEventListener('change', (e) => {
             vscode.postMessage({ type: 'toggleOnlyRef', value: e.target.checked });
+        });
+        document.getElementById('group-mode-select').addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'toggleGroupMode', value: e.target.value });
         });
         window.addEventListener('message', event => {
             const msg = event.data;
@@ -257,7 +275,28 @@ function getBrowserHtml(cspSource) {
         .formula-meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--vscode-descriptionForeground); }
         .formula-meta .label { font-family: var(--vscode-editor-font-family); color: var(--vscode-textLink-foreground); }
         .formula-meta .line { opacity: 0.6; }
+        .formula-meta .line .sec-info { opacity: 0.5; font-style: italic; }
         .unref-toggle { font-size: 11px; color: var(--vscode-textLink-foreground); cursor: pointer; margin-bottom: 10px; user-select: none; }
+        .section-group { margin-bottom: 6px; }
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: var(--vscode-sideBarSectionHeader-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            user-select: none;
+        }
+        .section-header:hover { background: var(--vscode-list-hoverBackground); }
+        .section-header .arrow { font-size: 10px; width: 12px; flex-shrink: 0; }
+        .section-header .section-title { flex: 1; }
+        .section-header.subsection-header { font-weight: 400; font-size: 11px; background: transparent; border: none; }
+        .section-header .section-count { font-weight: normal; color: var(--vscode-descriptionForeground); font-size: 11px; }
+        .section-body { padding-top: 4px; display: flex; flex-direction: column; gap: 6px; }
         .empty-state { text-align: center; color: var(--vscode-descriptionForeground); padding: 48px 8px; }
         .count-info { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 8px; }
     </style>
@@ -280,6 +319,8 @@ function getBrowserHtml(cspSource) {
         let currentFormulas = [];
         let searchMode = 'both';
         let showUnreferenced = true;
+        let groupMode = 'none';
+        const collapsedGroups = {};
 
         const searchInput = document.getElementById('search-input');
         const formulaList = document.getElementById('formula-list');
@@ -321,10 +362,12 @@ function getBrowserHtml(cspSource) {
                         btn.textContent = 'Refresh';
                         btn.disabled = false;
                         btn.style.opacity = '1';
-                        // 短暂显示结果
-                        btn.textContent = msg.message || 'Refresh';
                         setTimeout(() => { btn.textContent = 'Refresh'; }, 1500);
                     }
+                    break;
+                case 'groupMode':
+                    groupMode = msg.value || 'none';
+                    render();
                     break;
             }
         });
@@ -340,7 +383,7 @@ function getBrowserHtml(cspSource) {
             emptyState.style.display = 'none';
             const refCount = currentFormulas.filter(f => f.referenced).length;
             const unrefCount = currentFormulas.length - refCount;
-            countInfo.textContent = currentFormulas.length + ' formulas (' + refCount + ' referenced, ' + unrefCount + ' unreferenced)';
+            countInfo.textContent = currentFormulas.length + ' formulas (' + refCount + ' referenced, ' + unrefCount + ' unreferenced) | group: ' + groupMode;
             countInfo.style.display = 'block';
             if (unrefCount > 0) {
                 unrefToggle.style.display = 'block';
@@ -353,6 +396,16 @@ function getBrowserHtml(cspSource) {
         function filterFormulas() {
             const query = searchInput.value.toLowerCase().trim();
             formulaList.innerHTML = '';
+            if (groupMode === 'section') {
+                groupBySectionOnly(query);
+            } else if (groupMode === 'subsection') {
+                groupBySubsection(query);
+            } else {
+                filterFormulasFlat(query);
+            }
+        }
+
+        function filterFormulasFlat(query) {
             let visible = 0;
             currentFormulas.forEach(f => {
                 if (!f.referenced && !showUnreferenced) return;
@@ -365,6 +418,116 @@ function getBrowserHtml(cspSource) {
             if (visible === 0 && query !== '') {
                 formulaList.innerHTML = '<div class="empty-state">No matching formulas</div>';
             }
+        }
+
+        function groupBySectionOnly(query) {
+            const order = buildGroupMap(query, f => f.section || 'Uncategorized');
+            if (order.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching formulas</div>'; return; }
+            order.forEach(([title, formulas]) => {
+                formulaList.appendChild(makeCollapsible(title, formulas, 'section'));
+            });
+        }
+
+        function groupBySubsection(query) {
+            // 两级：section → subsection
+            const secMap = {};
+            const secOrder = [];
+            currentFormulas.forEach(f => {
+                if (!f.referenced && !showUnreferenced) return;
+                if (query !== '' && !matchFormula(f, query)) return;
+                const sec = f.section || 'Uncategorized';
+                const sub = f.subsection || '';
+                if (!secMap[sec]) { secMap[sec] = {}; secOrder.push(sec); }
+                if (!secMap[sec][sub]) secMap[sec][sub] = [];
+                secMap[sec][sub].push(f);
+            });
+            if (secOrder.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching formulas</div>'; return; }
+
+            secOrder.forEach(sec => {
+                const subMap = secMap[sec];
+                const subKeys = Object.keys(subMap);
+                let total = 0; subKeys.forEach(k => { total += subMap[k].length; });
+
+                const secDiv = document.createElement('div');
+                secDiv.className = 'section-group';
+
+                const secKey = 'section:' + sec;
+                const secCollapsed = collapsedGroups[secKey] || false;
+                const secHeader = document.createElement('div');
+                secHeader.className = 'section-header';
+                secHeader.innerHTML = '<span class="arrow">' + (secCollapsed ? '▶' : '▼') + '</span>' +
+                    '<span class="section-title">' + escapeHtml(sec) + '</span>' +
+                    '<span class="section-count">(' + total + ')</span>';
+                secHeader.addEventListener('click', () => {
+                    collapsedGroups[secKey] = !collapsedGroups[secKey];
+                    const body = secHeader.nextElementSibling;
+                    if (body) {
+                        body.style.display = collapsedGroups[secKey] ? 'none' : '';
+                        secHeader.querySelector('.arrow').textContent = collapsedGroups[secKey] ? '▶' : '▼';
+                    }
+                });
+                secDiv.appendChild(secHeader);
+
+                const secBody = document.createElement('div');
+                secBody.className = 'section-body';
+                if (secCollapsed) secBody.style.display = 'none';
+
+                subKeys.forEach(sub => {
+                    if (sub === '') {
+                        subMap[sub].forEach(f => { secBody.appendChild(createFormulaElement(f, false)); });
+                    } else {
+                        secBody.appendChild(makeCollapsible(sub, subMap[sub], 'subsection'));
+                    }
+                });
+                secDiv.appendChild(secBody);
+                formulaList.appendChild(secDiv);
+            });
+        }
+
+        function buildGroupMap(query, keyFn) {
+            const map = {};
+            const order = [];
+            currentFormulas.forEach(f => {
+                if (!f.referenced && !showUnreferenced) return;
+                if (query !== '' && !matchFormula(f, query)) return;
+                const key = keyFn(f);
+                if (!map[key]) { map[key] = []; order.push(key); }
+                map[key].push(f);
+            });
+            return order.map(k => [k, map[k]]);
+        }
+
+        function makeCollapsible(title, formulas, level) {
+            const key = level + ':' + title;
+            const div = document.createElement('div');
+            div.className = 'section-group';
+
+            const header = document.createElement('div');
+            header.className = 'section-header' + (level === 'subsection' ? ' subsection-header' : '');
+            if (level === 'subsection') header.style.paddingLeft = '28px';
+            const collapsed = collapsedGroups[key] || false;
+            const count = Array.isArray(formulas) ? formulas.length : 0;
+            header.innerHTML = '<span class="arrow">' + (collapsed ? '▶' : '▼') + '</span>' +
+                '<span class="section-title">' + escapeHtml(title) + '</span>' +
+                '<span class="section-count">(' + count + ')</span>';
+            header.addEventListener('click', () => {
+                collapsedGroups[key] = !collapsedGroups[key];
+                const body = header.nextElementSibling;
+                if (body) {
+                    body.style.display = collapsedGroups[key] ? 'none' : '';
+                    header.querySelector('.arrow').textContent = collapsedGroups[key] ? '▶' : '▼';
+                }
+            });
+            div.appendChild(header);
+
+            const body = document.createElement('div');
+            body.className = 'section-body';
+            if (collapsed) body.style.display = 'none';
+            if (Array.isArray(formulas)) {
+                formulas.forEach(f => { body.appendChild(createFormulaElement(f, false)); });
+            }
+            div.appendChild(body);
+            return div;
         }
 
         function matchFormula(f, query) {
@@ -390,7 +553,8 @@ function getBrowserHtml(cspSource) {
             } else {
                 svgHtml = '<div class="svg-wrap" style="color:var(--vscode-descriptionForeground);padding:12px;">No SVG data</div>';
             }
-            div.innerHTML = svgHtml + '<div class="formula-meta"><span class="label">' + escapeHtml(f.label) + '</span><span class="line">L' + f.line + ' | ' + escapeHtml(f.envType) + '</span></div>';
+            const sectionInfo = (f.section ? '§' + f.section : '') + (f.subsection ? ' › ' + f.subsection : '');
+            div.innerHTML = svgHtml + '<div class="formula-meta"><span class="label">' + escapeHtml(f.label) + '</span><span class="line">L' + f.line + ' | ' + escapeHtml(f.envType) + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
             div.addEventListener('click', () => { vscode.postMessage({ type: 'copyLabel', label: f.label }); });
             div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: f.line }); });
             div.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', f.label); e.dataTransfer.effectAllowed = 'copy'; });

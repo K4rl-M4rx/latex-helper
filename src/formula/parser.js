@@ -3,7 +3,7 @@
  */
 
 const crypto = require('crypto');
-const { extractPreamble, findFormulaEnvironments, extractLabels, findReferences } = require('../utils/tex');
+const { extractPreamble, findFormulaEnvironments, extractLabels, findReferences, findSections } = require('../utils/tex');
 
 /**
  * @param {string} text - .tex 文件全文
@@ -26,6 +26,7 @@ function parseDocument(text) {
 
     const envs = findFormulaEnvironments(text);
     const refs = findReferences(text);
+    const sections = findSections(text);
 
     /** @type {Array} */
     const formulas = [];
@@ -36,6 +37,19 @@ function parseDocument(text) {
 
         const bodyHash = computeHash(env.body);
 
+        // 找最近的 section 和 subsection
+        let section = '';
+        let subsection = '';
+        for (const sec of sections) {
+            if (sec.line <= env.startLine) {
+                if (sec.level === 1) { section = sec.title; subsection = ''; }
+                else if (sec.level === 2) { subsection = sec.title; }
+                else if (sec.level === 3) { /* subsubsection 暂不计入 subsection */ }
+            } else {
+                break;
+            }
+        }
+
         for (const label of labels) {
             formulas.push({
                 label,
@@ -43,7 +57,9 @@ function parseDocument(text) {
                 bodyHash,
                 envType: env.env,
                 line: env.startLine,
-                referenced: refs.has(label)
+                referenced: refs.has(label),
+                section,
+                subsection
             });
         }
     }
