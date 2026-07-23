@@ -20,6 +20,19 @@ class FormulaBrowser {
         this._pendingMessages = [];
         /** @type {(() => void) | null} */
         this._onRefresh = null;
+        /** @type {string[]} 最近使用的公式 label（最多 5 个，最新在前），持久化到 workspaceState */
+        this._recentLabels = context.workspaceState.get('latex-helper.recentFormulas', []);
+    }
+
+    /**
+     * 记录一次公式使用（复制 label 或拖拽插入），并通知 WebView 更新最近使用分组。
+     * @param {string} label
+     */
+    _recordUsed(label) {
+        if (!label || typeof label !== 'string') return;
+        this._recentLabels = [label, ...this._recentLabels.filter(l => l !== label)].slice(0, 5);
+        this.context.workspaceState.update('latex-helper.recentFormulas', this._recentLabels);
+        this.sendMessage({ type: 'recentFormulas', labels: this._recentLabels });
     }
 
     /**
@@ -58,11 +71,15 @@ class FormulaBrowser {
                     this.panel.webview.postMessage(msg);
                 }
                 this._pendingMessages = [];
+                // 补发最近使用列表
+                this.panel.webview.postMessage({ type: 'recentFormulas', labels: this._recentLabels });
                 readySent = true;
             } else if (message.type === 'refreshFormulas') {
                 if (this._onRefresh) {
                     this._onRefresh();
                 }
+            } else if (message.type === 'formulaUsed') {
+                this._recordUsed(message.label);
             } else {
                 handlePanelMessage(message);
             }
