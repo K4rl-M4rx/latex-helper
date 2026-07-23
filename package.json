@@ -44,6 +44,10 @@
           "id": "latex-helper.formulaPanel",
           "name": "Formula Panel",
           "type": "webview"
+        },
+        {
+          "id": "latex-helper.groupModeTree",
+          "name": "Group By"
         }
       ]
     },

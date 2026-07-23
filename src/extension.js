@@ -10,6 +10,7 @@ const { compileFormulas, checkTool } = require('./formula/compiler');
 const { getCacheDir, writeCache, clearCache: clearCacheDir } = require('./formula/cache');
 const { FormulaPanelProvider } = require('./formula/panel');
 const { FormulaBrowser } = require('./formula/browser');
+const { GroupModeTreeProvider } = require('./tree/group-mode');
 const { importSnippets } = require('./snippets/importer');
 const { registerSnippetProvider } = require('./snippets/provider');
 
@@ -26,10 +27,10 @@ let currentPreambleHash = null;
 let currentFormulas = [];
 
 /** @type {boolean} */
-let onlyRef = false;
+let onlyRef = true;
 
 /** @type {string} */
-let groupMode = 'none';
+let groupMode = 'section';
 
 /** @type {string} */
 let cacheDir = '';
@@ -68,13 +69,24 @@ function activate(context) {
             requestRefresh(activeLatexDoc);
         }
     };
-    panelProvider._onToggleGroupMode = (value) => {
-        groupMode = value;
-        formulaBrowser.sendMessage({ type: 'groupMode', value });
-    };
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('latex-helper.formulaPanel', panelProvider, {
             webviewOptions: { retainContextWhenHidden: true }
+        })
+    );
+
+    // 原生 TreeView：分类方式选择（展开状态由 VS Code 记忆，不会自动收回）
+    const groupModeProvider = new GroupModeTreeProvider();
+    groupModeProvider.setMode(groupMode);
+    context.subscriptions.push(
+        vscode.window.registerTreeDataProvider('latex-helper.groupModeTree', groupModeProvider)
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand('latex-helper.setGroupMode', (mode) => {
+            if (typeof mode !== 'string' || mode === groupMode) return;
+            groupMode = mode;
+            groupModeProvider.setMode(mode);
+            formulaBrowser.sendMessage({ type: 'groupMode', value: mode });
         })
     );
 
