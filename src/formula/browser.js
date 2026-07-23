@@ -16,6 +16,8 @@ class FormulaBrowser {
         this.panel = null;
         /** @type {Array | null} */
         this._pendingFormulas = null;
+        /** @type {Array} */
+        this._pendingMessages = [];
         /** @type {(() => void) | null} */
         this._onRefresh = null;
     }
@@ -51,6 +53,11 @@ class FormulaBrowser {
                         formulas: this._pendingFormulas
                     });
                 }
+                // 重放缓存的 pending 消息
+                for (const msg of this._pendingMessages) {
+                    this.panel.webview.postMessage(msg);
+                }
+                this._pendingMessages = [];
                 readySent = true;
             } else if (message.type === 'refreshFormulas') {
                 if (this._onRefresh) {
@@ -93,11 +100,20 @@ class FormulaBrowser {
 
     /**
      * 发送任意消息到浏览器 WebView。
+     * 浏览器未打开时排队；同类型的状态类消息只保留最新一条，
+     * 避免排队消息无限增长、重开时回放过期状态（如旧的 "Compiling..."）。
      * @param {*} message
      */
     sendMessage(message) {
         if (this.panel) {
             this.panel.webview.postMessage(message);
+        } else {
+            if (message && typeof message.type === 'string') {
+                this._pendingMessages = this._pendingMessages.filter(
+                    m => !(m && m.type === message.type)
+                );
+            }
+            this._pendingMessages.push(message);
         }
     }
 }

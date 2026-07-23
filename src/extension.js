@@ -29,10 +29,19 @@ let currentFormulas = [];
 let onlyRef = false;
 
 /** @type {string} */
+let groupMode = 'none';
+
+/** @type {string} */
 let cacheDir = '';
 
-/** @type {boolean} */
-let refreshing = false;
+/** @type {vscode.TextDocument | null} */
+let activeLatexDoc = null;
+
+/** @type {boolean} 刷新串行化：同一时间只允许一个 refreshFormulas 在运行 */
+let isRefreshing = false;
+
+/** @type {vscode.TextDocument | null} 刷新进行中排队等待的最新文档 */
+let queuedRefreshDoc = null;
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -50,20 +59,18 @@ function activate(context) {
         currentPreambleHash = null;
         panelProvider.clear();
         formulaBrowser.clear();
-        const editor = vscode.window.activeTextEditor;
-        if (editor && editor.document.languageId === 'latex') {
-            refreshFormulas(editor.document);
-        }
         vscode.window.showInformationMessage('LaTeX Helper: cache cleared');
     };
     panelProvider._onToggleOnlyRef = (value) => {
         onlyRef = value;
-        // 强制重新编译以只生成被引用公式的 SVG
         currentPreambleHash = null;
-        const editor = vscode.window.activeTextEditor;
-        if (editor && editor.document.languageId === 'latex') {
-            refreshFormulas(editor.document);
+        if (activeLatexDoc) {
+            requestRefresh(activeLatexDoc);
         }
+    };
+    panelProvider._onToggleGroupMode = (value) => {
+        groupMode = value;
+        formulaBrowser.sendMessage({ type: 'groupMode', value });
     };
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('latex-helper.formulaPanel', panelProvider, {
@@ -73,10 +80,13 @@ function activate(context) {
 
     // 公式浏览器（独立 Tab）
     formulaBrowser = new FormulaBrowser(context);
-    formulaBrowser._onRefresh = () => {
-        const editor = vscode.window.activeTextEditor;
-        if (editor && editor.document.languageId === 'latex') {
-            refreshFormulas(editor.document);
+    formulaBrowser._onRefresh = async () => {
+        const doc = await resolveRefreshDocument();
+        if (doc) {
+            requestRefresh(doc);
+        } else {
+            formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'No document' });
+            vscode.window.showWarningMessage('LaTeX Helper: no active LaTeX document to refresh');
         }
     };
 
@@ -100,19 +110,31 @@ function activate(context) {
         })
     );
 
-    // 监听编辑器切换
+    // 监听编辑器切换，追踪当前 LaTeX 文档
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor && editor.document.languageId === 'latex') {
-                refreshFormulas(editor.document);
+                activeLatexDoc = editor.document;
+                requestRefresh(editor.document);
             }
         })
     );
 
-    // 启动时如果已有 LaTeX 文件打开，立即刷新
+    // 保存当前追踪的 LaTeX 文档时自动刷新，保证浏览器内容不落后于磁盘
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(doc => {
+            if (doc.languageId === 'latex' && activeLatexDoc &&
+                doc.uri.toString() === activeLatexDoc.uri.toString()) {
+                requestRefresh(doc);
+            }
+        })
+    );
+
+    // 启动时追踪
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor && activeEditor.document.languageId === 'latex') {
-        refreshFormulas(activeEditor.document);
+        activeLatexDoc = activeEditor.document;
+        requestRefresh(activeEditor.document);
     }
 
     // 首次启动时尝试导入 snippets
@@ -160,14 +182,69 @@ function readAuxLabels(document, auxPathConfig) {
 }
 
 /**
+ * 解析刷新应使用的文档。
+ * 优先取当前活动的 LaTeX 编辑器；否则回退到最近追踪的文档；
+ * 若该文档已关闭，从磁盘重新打开以获取最新内容。
+ * @returns {Promise<vscode.TextDocument | null>}
+ */
+async function resolveRefreshDocument() {
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.languageId === 'latex') {
+        activeLatexDoc = editor.document;
+        return editor.document;
+    }
+    if (activeLatexDoc) {
+        if (!activeLatexDoc.isClosed) {
+            return activeLatexDoc;
+        }
+        // 文档已关闭：TextDocument 内容是关闭时的快照，必须从磁盘重开
+        try {
+            const doc = await vscode.workspace.openTextDocument(activeLatexDoc.uri);
+            activeLatexDoc = doc;
+            return doc;
+        } catch {
+            activeLatexDoc = null;
+        }
+    }
+    return null;
+}
+
+/**
+ * 串行化刷新请求。
+ * 编译是耗时异步操作，并发刷新会导致先发起的旧结果覆盖新结果。
+ * 刷新进行中再收到请求时，只保留最新文档，结束后补跑一次。
+ * @param {vscode.TextDocument} document
+ */
+function requestRefresh(document) {
+    if (isRefreshing) {
+        queuedRefreshDoc = document;
+        return;
+    }
+    isRefreshing = true;
+    refreshFormulas(document)
+        .catch(() => { /* refreshFormulas 内部已处理并提示错误 */ })
+        .finally(() => {
+            isRefreshing = false;
+            if (queuedRefreshDoc) {
+                const next = queuedRefreshDoc;
+                queuedRefreshDoc = null;
+                requestRefresh(next);
+            }
+        });
+}
+
+/**
  * 刷新公式面板。
  * @param {vscode.TextDocument} document
  */
 async function refreshFormulas(document) {
-    if (refreshing) return;
-    refreshing = true;
     formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: true, message: 'Compiling...' });
     try {
+        // 防御：已关闭文档的 getText() 是旧快照，从磁盘重开
+        if (document.isClosed) {
+            document = await vscode.workspace.openTextDocument(document.uri);
+            activeLatexDoc = document;
+        }
         const text = document.getText();
         const parsed = parseDocument(text);
 
@@ -230,7 +307,9 @@ async function refreshFormulas(document) {
                 body: f.body,
                 line: f.line,
                 referenced: f.referenced,
-                envType: f.envType
+                envType: f.envType,
+                section: f.section || '',
+                subsection: f.subsection || ''
             }));
             formulaBrowser.update(panelData);
             panelProvider.update(panelData);
@@ -242,12 +321,11 @@ async function refreshFormulas(document) {
         currentPreambleHash = parsed.preambleHash;
         currentFormulas = formulas;
         formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Done' });
+        formulaBrowser.sendMessage({ type: 'groupMode', value: groupMode });
     } catch (err) {
         console.error('LaTeX Helper: formula refresh failed', err);
         vscode.window.showErrorMessage(`LaTeX Helper: ${err.message}`);
         formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Failed' });
-    } finally {
-        refreshing = false;
     }
 }
 

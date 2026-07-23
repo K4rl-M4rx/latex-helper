@@ -66,19 +66,26 @@ function runLatex(texContent, workDir) {
             '-halt-on-error',
             '-output-directory', workDir,
             texFile
-        ], { cwd: workDir, timeout: 30000 });
+        ], { cwd: workDir });
 
         let stdout = '';
         let stderr = '';
+
+        const timer = setTimeout(() => {
+            proc.kill();
+            reject(new Error('latex compilation timed out (30s)'));
+        }, 30000);
 
         proc.stdout.on('data', (data) => { stdout += data.toString(); });
         proc.stderr.on('data', (data) => { stderr += data.toString(); });
 
         proc.on('error', (err) => {
+            clearTimeout(timer);
             reject(new Error(`Failed to start ${latexPath}: ${err.message}`));
         });
 
         proc.on('close', (code) => {
+            clearTimeout(timer);
             if (code !== 0) {
                 const logLines = stdout.split('\n');
                 const errorLines = logLines.filter(l => l.startsWith('!')).slice(-20);
@@ -89,11 +96,6 @@ function runLatex(texContent, workDir) {
             }
             resolve(dviFile);
         });
-
-        setTimeout(() => {
-            proc.kill();
-            reject(new Error('latex compilation timed out (30s)'));
-        }, 30000);
     });
 }
 
