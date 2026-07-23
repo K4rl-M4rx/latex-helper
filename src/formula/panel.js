@@ -321,6 +321,8 @@ function getBrowserHtml(cspSource) {
         let showUnreferenced = true;
         let groupMode = 'none';
         const collapsedGroups = {};
+        // 切换分类方式后，所有分组默认收缩；用户手动点击后以其选择为准
+        let defaultCollapsed = false;
 
         const searchInput = document.getElementById('search-input');
         const formulaList = document.getElementById('formula-list');
@@ -365,10 +367,18 @@ function getBrowserHtml(cspSource) {
                         setTimeout(() => { btn.textContent = 'Refresh'; }, 1500);
                     }
                     break;
-                case 'groupMode':
-                    groupMode = msg.value || 'none';
+                case 'groupMode': {
+                    const newGroupMode = msg.value || 'none';
+                    if (newGroupMode !== groupMode) {
+                        groupMode = newGroupMode;
+                        // 仅在分类方式真正变化时重置：全部分组默认收缩
+                        // （每次刷新后 extension 会重发相同值，不能因此清掉用户手动的展开/收缩）
+                        for (const k of Object.keys(collapsedGroups)) delete collapsedGroups[k];
+                        defaultCollapsed = groupMode !== 'none';
+                    }
                     render();
                     break;
+                }
             }
         });
 
@@ -452,14 +462,15 @@ function getBrowserHtml(cspSource) {
                 secDiv.className = 'section-group';
 
                 const secKey = 'section:' + sec;
-                const secCollapsed = collapsedGroups[secKey] || false;
+                const secCollapsed = (secKey in collapsedGroups) ? collapsedGroups[secKey] : defaultCollapsed;
                 const secHeader = document.createElement('div');
                 secHeader.className = 'section-header';
                 secHeader.innerHTML = '<span class="arrow">' + (secCollapsed ? '▶' : '▼') + '</span>' +
                     '<span class="section-title">' + escapeHtml(sec) + '</span>' +
                     '<span class="section-count">(' + total + ')</span>';
                 secHeader.addEventListener('click', () => {
-                    collapsedGroups[secKey] = !collapsedGroups[secKey];
+                    const cur = (secKey in collapsedGroups) ? collapsedGroups[secKey] : defaultCollapsed;
+                    collapsedGroups[secKey] = !cur;
                     const body = secHeader.nextElementSibling;
                     if (body) {
                         body.style.display = collapsedGroups[secKey] ? 'none' : '';
@@ -505,13 +516,14 @@ function getBrowserHtml(cspSource) {
             const header = document.createElement('div');
             header.className = 'section-header' + (level === 'subsection' ? ' subsection-header' : '');
             if (level === 'subsection') header.style.paddingLeft = '28px';
-            const collapsed = collapsedGroups[key] || false;
+            const collapsed = (key in collapsedGroups) ? collapsedGroups[key] : defaultCollapsed;
             const count = Array.isArray(formulas) ? formulas.length : 0;
             header.innerHTML = '<span class="arrow">' + (collapsed ? '▶' : '▼') + '</span>' +
                 '<span class="section-title">' + escapeHtml(title) + '</span>' +
                 '<span class="section-count">(' + count + ')</span>';
             header.addEventListener('click', () => {
-                collapsedGroups[key] = !collapsedGroups[key];
+                const cur = (key in collapsedGroups) ? collapsedGroups[key] : defaultCollapsed;
+                collapsedGroups[key] = !cur;
                 const body = header.nextElementSibling;
                 if (body) {
                     body.style.display = collapsedGroups[key] ? 'none' : '';
