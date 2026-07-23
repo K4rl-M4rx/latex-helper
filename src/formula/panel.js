@@ -16,8 +16,6 @@ class FormulaPanelProvider {
         this._onClearCache = null;
         /** @type {((onlyRef: boolean) => void) | null} */
         this._onToggleOnlyRef = null;
-        /** @type {((value: string) => void) | null} */
-        this._onToggleGroupMode = null;
     }
 
     resolveWebviewView(webviewView, _resolveContext, _token) {
@@ -44,11 +42,6 @@ class FormulaPanelProvider {
                     case 'toggleOnlyRef':
                         if (this._onToggleOnlyRef) {
                             this._onToggleOnlyRef(message.value);
-                        }
-                        break;
-                    case 'toggleGroupMode':
-                        if (this._onToggleGroupMode) {
-                            this._onToggleGroupMode(message.value);
                         }
                         break;
                 }
@@ -157,17 +150,9 @@ function getPanelHtml(cspSource) {
     <button id="open-btn">Open Formula Browser</button>
     <button id="clear-cache-btn" style="margin-top:6px;background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);">Clear Cache</button>
     <label class="checkbox-row">
-        <input type="checkbox" id="only-ref-check" />
+        <input type="checkbox" id="only-ref-check" checked />
         Only referenced formulas
     </label>
-    <div class="checkbox-row" style="margin-top:8px;">
-        <span>Group by:</span>
-        <select id="group-mode-select" style="flex:1;padding:3px 6px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:2px;font-family:inherit;font-size:12px;">
-            <option value="none">None</option>
-            <option value="section">Section</option>
-            <option value="subsection">Subsection</option>
-        </select>
-    </div>
     <div class="hint">
         Click the button above to browse all labeled formulas in a separate tab with search, copy, and drag support.
     </div>
@@ -181,9 +166,6 @@ function getPanelHtml(cspSource) {
         });
         document.getElementById('only-ref-check').addEventListener('change', (e) => {
             vscode.postMessage({ type: 'toggleOnlyRef', value: e.target.checked });
-        });
-        document.getElementById('group-mode-select').addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'toggleGroupMode', value: e.target.value });
         });
         window.addEventListener('message', event => {
             const msg = event.data;
@@ -276,7 +258,7 @@ function getBrowserHtml(cspSource) {
         .formula-meta .label { font-family: var(--vscode-editor-font-family); color: var(--vscode-textLink-foreground); }
         .formula-meta .line { opacity: 0.6; }
         .formula-meta .line .sec-info { opacity: 0.5; font-style: italic; }
-        .unref-toggle { font-size: 11px; color: var(--vscode-textLink-foreground); cursor: pointer; margin-bottom: 10px; user-select: none; }
+        .unref-toggle { font-size: 11px; color: var(--vscode-textLink-foreground); cursor: pointer; margin-bottom: 10px; user-select: none; display: flex; align-items: center; gap: 4px; }
         .section-group { margin-bottom: 6px; }
         .section-header {
             display: flex;
@@ -292,7 +274,17 @@ function getBrowserHtml(cspSource) {
             user-select: none;
         }
         .section-header:hover { background: var(--vscode-list-hoverBackground); }
-        .section-header .arrow { font-size: 10px; width: 12px; flex-shrink: 0; }
+        .section-header .arrow, .unref-toggle .arrow {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            flex-shrink: 0;
+            color: var(--vscode-icon-foreground, var(--vscode-foreground));
+            transition: transform 0.12s ease-in-out;
+        }
+        .section-header .arrow svg, .unref-toggle .arrow svg { width: 16px; height: 16px; display: block; }
+        .section-header .arrow.expanded, .unref-toggle .arrow.expanded { transform: rotate(90deg); }
         .section-header .section-title { flex: 1; }
         .section-header.subsection-header { font-weight: 400; font-size: 11px; background: transparent; border: none; }
         .section-header .section-count { font-weight: normal; color: var(--vscode-descriptionForeground); font-size: 11px; }
@@ -319,10 +311,17 @@ function getBrowserHtml(cspSource) {
         let currentFormulas = [];
         let searchMode = 'both';
         let showUnreferenced = true;
-        let groupMode = 'none';
+        let groupMode = 'section';
+        // 最近使用的公式 label（最多 5 个，最新在前），由扩展端持久化并推送
+        let recentLabels = [];
         const collapsedGroups = {};
         // 切换分类方式后，所有分组默认收缩；用户手动点击后以其选择为准
         let defaultCollapsed = false;
+        // VS Code 树视图同款 chevron（参考 LaTeX Workshop 大纲箭头）：收起朝右，展开旋转 90° 朝下
+        const CHEVRON_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        function arrowHtml(collapsed) {
+            return '<span class="arrow' + (collapsed ? '' : ' expanded') + '">' + CHEVRON_SVG + '</span>';
+        }
 
         const searchInput = document.getElementById('search-input');
         const formulaList = document.getElementById('formula-list');
@@ -350,6 +349,10 @@ function getBrowserHtml(cspSource) {
                     currentFormulas = msg.formulas || [];
                     render();
                     break;
+                case 'recentFormulas':
+                    recentLabels = msg.labels || [];
+                    render();
+                    break;
                 case 'clear':
                     currentFormulas = [];
                     render();
@@ -368,13 +371,13 @@ function getBrowserHtml(cspSource) {
                     }
                     break;
                 case 'groupMode': {
-                    const newGroupMode = msg.value || 'none';
+                    const newGroupMode = msg.value === 'subsection' ? 'subsection' : 'section';
                     if (newGroupMode !== groupMode) {
                         groupMode = newGroupMode;
                         // 仅在分类方式真正变化时重置：全部分组默认收缩
                         // （每次刷新后 extension 会重发相同值，不能因此清掉用户手动的展开/收缩）
                         for (const k of Object.keys(collapsedGroups)) delete collapsedGroups[k];
-                        defaultCollapsed = groupMode !== 'none';
+                        defaultCollapsed = true;
                     }
                     render();
                     break;
@@ -397,7 +400,7 @@ function getBrowserHtml(cspSource) {
             countInfo.style.display = 'block';
             if (unrefCount > 0) {
                 unrefToggle.style.display = 'block';
-                unrefToggle.textContent = showUnreferenced ? '▼ Unreferenced (' + unrefCount + ')' : '▶ Unreferenced (' + unrefCount + ')';
+                unrefToggle.innerHTML = arrowHtml(!showUnreferenced) + '<span>Unreferenced (' + unrefCount + ')</span>';
             } else { unrefToggle.style.display = 'none'; }
             filterFormulas();
         }
@@ -406,28 +409,26 @@ function getBrowserHtml(cspSource) {
         function filterFormulas() {
             const query = searchInput.value.toLowerCase().trim();
             formulaList.innerHTML = '';
-            if (groupMode === 'section') {
-                groupBySectionOnly(query);
-            } else if (groupMode === 'subsection') {
+            appendRecentGroup(query);
+            if (groupMode === 'subsection') {
                 groupBySubsection(query);
             } else {
-                filterFormulasFlat(query);
+                groupBySectionOnly(query);
             }
         }
 
-        function filterFormulasFlat(query) {
-            let visible = 0;
-            currentFormulas.forEach(f => {
-                if (!f.referenced && !showUnreferenced) return;
-                const matchesSearch = query === '' || matchFormula(f, query);
-                if (query !== '' && !f.referenced) return;
-                const el = createFormulaElement(f, query !== '' && !matchesSearch);
-                formulaList.appendChild(el);
-                if (query === '' || matchesSearch) visible++;
-            });
-            if (visible === 0 && query !== '') {
-                formulaList.innerHTML = '<div class="empty-state">No matching formulas</div>';
+        // 最近使用分组：固定在列表顶部，公式仍同时保留在原有分类中
+        function appendRecentGroup(query) {
+            if (!recentLabels || recentLabels.length === 0) return;
+            const items = [];
+            for (const label of recentLabels) {
+                const f = currentFormulas.find(x => x.label === label);
+                if (!f) continue;
+                if (query !== '' && !matchFormula(f, query)) continue;
+                items.push(f);
             }
+            if (items.length === 0) return;
+            formulaList.appendChild(makeCollapsible('Recently Used', items, 'recent'));
         }
 
         function groupBySectionOnly(query) {
@@ -465,17 +466,16 @@ function getBrowserHtml(cspSource) {
                 const secCollapsed = (secKey in collapsedGroups) ? collapsedGroups[secKey] : defaultCollapsed;
                 const secHeader = document.createElement('div');
                 secHeader.className = 'section-header';
-                secHeader.innerHTML = '<span class="arrow">' + (secCollapsed ? '▶' : '▼') + '</span>' +
+                secHeader.innerHTML = arrowHtml(secCollapsed) +
                     '<span class="section-title">' + escapeHtml(sec) + '</span>' +
                     '<span class="section-count">(' + total + ')</span>';
                 secHeader.addEventListener('click', () => {
                     const cur = (secKey in collapsedGroups) ? collapsedGroups[secKey] : defaultCollapsed;
                     collapsedGroups[secKey] = !cur;
                     const body = secHeader.nextElementSibling;
-                    if (body) {
-                        body.style.display = collapsedGroups[secKey] ? 'none' : '';
-                        secHeader.querySelector('.arrow').textContent = collapsedGroups[secKey] ? '▶' : '▼';
-                    }
+                    const arrowEl = secHeader.querySelector('.arrow');
+                    if (body) body.style.display = collapsedGroups[secKey] ? 'none' : '';
+                    if (arrowEl) arrowEl.classList.toggle('expanded', !collapsedGroups[secKey]);
                 });
                 secDiv.appendChild(secHeader);
 
@@ -518,17 +518,16 @@ function getBrowserHtml(cspSource) {
             if (level === 'subsection') header.style.paddingLeft = '28px';
             const collapsed = (key in collapsedGroups) ? collapsedGroups[key] : defaultCollapsed;
             const count = Array.isArray(formulas) ? formulas.length : 0;
-            header.innerHTML = '<span class="arrow">' + (collapsed ? '▶' : '▼') + '</span>' +
+            header.innerHTML = arrowHtml(collapsed) +
                 '<span class="section-title">' + escapeHtml(title) + '</span>' +
                 '<span class="section-count">(' + count + ')</span>';
             header.addEventListener('click', () => {
                 const cur = (key in collapsedGroups) ? collapsedGroups[key] : defaultCollapsed;
                 collapsedGroups[key] = !cur;
                 const body = header.nextElementSibling;
-                if (body) {
-                    body.style.display = collapsedGroups[key] ? 'none' : '';
-                    header.querySelector('.arrow').textContent = collapsedGroups[key] ? '▶' : '▼';
-                }
+                const arrowEl = header.querySelector('.arrow');
+                if (body) body.style.display = collapsedGroups[key] ? 'none' : '';
+                if (arrowEl) arrowEl.classList.toggle('expanded', !collapsedGroups[key]);
             });
             div.appendChild(header);
 
@@ -567,9 +566,9 @@ function getBrowserHtml(cspSource) {
             }
             const sectionInfo = (f.section ? '§' + f.section : '') + (f.subsection ? ' › ' + f.subsection : '');
             div.innerHTML = svgHtml + '<div class="formula-meta"><span class="label">' + escapeHtml(f.label) + '</span><span class="line">L' + f.line + ' | ' + escapeHtml(f.envType) + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
-            div.addEventListener('click', () => { vscode.postMessage({ type: 'copyLabel', label: f.label }); });
+            div.addEventListener('click', () => { vscode.postMessage({ type: 'copyLabel', label: f.label }); vscode.postMessage({ type: 'formulaUsed', label: f.label }); });
             div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: f.line }); });
-            div.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', f.label); e.dataTransfer.effectAllowed = 'copy'; });
+            div.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', f.label); e.dataTransfer.effectAllowed = 'copy'; vscode.postMessage({ type: 'formulaUsed', label: f.label }); });
             return div;
         }
         function injectWhiteBackground(svg) {
