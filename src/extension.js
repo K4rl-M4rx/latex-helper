@@ -3,9 +3,11 @@
  */
 
 const vscode = require('vscode');
+const fs = require('fs');
+const path = require('path');
 const { parseDocument, deduplicateFormulas, computeHash } = require('./formula/parser');
 const { compileFormulas, checkTool } = require('./formula/compiler');
-const { needsRecompile, getCacheDir, writeCache, readAllFromCache, computeHash: cacheHash, clearCache: clearCacheDir } = require('./formula/cache');
+const { getCacheDir, writeCache, clearCache: clearCacheDir } = require('./formula/cache');
 const { FormulaPanelProvider } = require('./formula/panel');
 const { FormulaBrowser } = require('./formula/browser');
 const { importSnippets } = require('./snippets/importer');
@@ -23,8 +25,8 @@ let currentPreambleHash = null;
 /** @type {Array} */
 let currentFormulas = [];
 
-/** @type {ReturnType<typeof setTimeout> | null} */
-let debounceTimer = null;
+/** @type {boolean} */
+let onlyRef = false;
 
 /** @type {string} */
 let cacheDir = '';
@@ -51,6 +53,15 @@ function activate(context) {
         }
         vscode.window.showInformationMessage('LaTeX Helper: cache cleared');
     };
+    panelProvider._onToggleOnlyRef = (value) => {
+        onlyRef = value;
+        // 强制重新编译以只生成被引用公式的 SVG
+        currentPreambleHash = null;
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.languageId === 'latex') {
+            refreshFormulas(editor.document);
+        }
+    };
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('latex-helper.formulaPanel', panelProvider, {
             webviewOptions: { retainContextWhenHidden: true }
@@ -59,6 +70,12 @@ function activate(context) {
 
     // 公式浏览器（独立 Tab）
     formulaBrowser = new FormulaBrowser(context);
+    formulaBrowser._onRefresh = () => {
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.languageId === 'latex') {
+            refreshFormulas(editor.document);
+        }
+    };
 
     // 注册 snippet 补全 Provider
     context.subscriptions.push(registerSnippetProvider(context));
@@ -89,21 +106,6 @@ function activate(context) {
         })
     );
 
-    // 监听文档变更
-    context.subscriptions.push(
-        vscode.workspace.onDidChangeTextDocument(event => {
-            const editor = vscode.window.activeTextEditor;
-            if (editor && event.document === editor.document
-                && editor.document.languageId === 'latex') {
-                // Debounce
-                if (debounceTimer) clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(() => {
-                    refreshFormulas(editor.document);
-                }, 500);
-            }
-        })
-    );
-
     // 启动时如果已有 LaTeX 文件打开，立即刷新
     const activeEditor = vscode.window.activeTextEditor;
     if (activeEditor && activeEditor.document.languageId === 'latex') {
@@ -115,6 +117,46 @@ function activate(context) {
 }
 
 /**
+ * 从 aux 文件中提取所有 \newlabel{name} 标签名。
+ * 同时搜索当前 .tex 目录和配置的 auxPath。
+ * @param {vscode.TextDocument} document
+ * @param {string} auxPathConfig
+ * @returns {Set<string>}
+ */
+function readAuxLabels(document, auxPathConfig) {
+    const labels = new Set();
+    const texDir = path.dirname(document.uri.fsPath);
+    const baseName = path.basename(document.uri.fsPath, '.tex');
+    const searchDirs = [texDir];
+
+    // 添加配置的 auxPath（相对于工作区根目录）
+    if (auxPathConfig) {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+        if (workspaceRoot) {
+            const auxDir = auxPathConfig.startsWith('./') || auxPathConfig.startsWith('../')
+                ? path.join(workspaceRoot, auxPathConfig)
+                : auxPathConfig;
+            searchDirs.push(auxDir);
+        }
+    }
+
+    for (const dir of searchDirs) {
+        const auxFile = path.join(dir, baseName + '.aux');
+        try {
+            if (!fs.existsSync(auxFile)) continue;
+            const content = fs.readFileSync(auxFile, 'utf-8');
+            // 解析 \newlabel{name}{...}
+            const re = /\\newlabel\{([^}]+)\}/g;
+            let match;
+            while ((match = re.exec(content)) !== null) {
+                labels.add(match[1]);
+            }
+        } catch { /* ignore missing/malformed aux */ }
+    }
+    return labels;
+}
+
+/**
  * 刷新公式面板。
  * @param {vscode.TextDocument} document
  */
@@ -123,65 +165,82 @@ async function refreshFormulas(document) {
         const text = document.getText();
         const parsed = parseDocument(text);
 
-        // 检测是否需要重新编译
+        // onlyRef 时只处理被引用的公式，节省编译时间
+        const formulas = onlyRef
+            ? parsed.formulas.filter(f => f.referenced)
+            : parsed.formulas;
         const preambleChanged = parsed.preambleHash !== currentPreambleHash;
-        const allHashes = parsed.formulas.map(f => ({ label: f.label, bodyHash: f.bodyHash }));
-        const needCompile = preambleChanged
-            || parsed.formulas.length === 0
-            || needsRecompile(parsed.preambleHash, allHashes, cacheDir);
 
-        if (needCompile && parsed.formulas.length > 0) {
-            // 去重：多个 label 可能共享同一 body（如 align 环境）
-            const { unique: uniqueFormulas, labelToBodyIndex } = deduplicateFormulas(parsed.formulas);
-            const compiled = await compileFormulas(parsed.preamble, uniqueFormulas);
+        if (formulas.length > 0) {
+            // 去重
+            const { unique: uniqueFormulas, labelToBodyIndex } = deduplicateFormulas(formulas);
 
-            // 写入缓存（所有 label 条目）
-            const cacheResults = parsed.formulas.map(f => ({
+            // 增量编译：检查每个 bodyHash 是否有缓存，只编译缺失的
+            /** @type {Array<{label: string, body: string}>} */
+            const toCompile = [];
+            /** @type {(string | null)[]} */
+            const svgResults = new Array(uniqueFormulas.length).fill(null);
+
+            for (let i = 0; i < uniqueFormulas.length; i++) {
+                const uf = uniqueFormulas[i];
+                const svgPath = path.join(cacheDir, uf.bodyHash + '.svg');
+                if (!preambleChanged && fs.existsSync(svgPath)) {
+                    try {
+                        svgResults[i] = fs.readFileSync(svgPath, 'utf-8');
+                    } catch { /* use null */ }
+                }
+                if (svgResults[i] === null) {
+                    toCompile.push(uf);
+                    svgResults[i] = '__pending__'; // 占位
+                }
+            }
+
+            if (toCompile.length > 0) {
+                const compiled = await compileFormulas(parsed.preamble, toCompile);
+                // 将新编译的结果填回 svgResults
+                const pendingIndices = [];
+                for (let i = 0; i < svgResults.length; i++) {
+                    if (svgResults[i] === '__pending__') {
+                        pendingIndices.push(i);
+                    }
+                }
+                for (let j = 0; j < compiled.length; j++) {
+                    svgResults[pendingIndices[j]] = compiled[j]?.svg || '';
+                }
+            }
+
+            // 写入缓存
+            const cacheResults = formulas.map(f => ({
                 label: f.label,
                 bodyHash: f.bodyHash,
-                svg: compiled[labelToBodyIndex.get(f.label)]?.svg || ''
+                svg: svgResults[labelToBodyIndex.get(f.label)] || ''
             }));
             writeCache(parsed.preambleHash, cacheDir, cacheResults);
 
             // 组装面板数据
-            const panelData = parsed.formulas.map(f => ({
+            const panelData = formulas.map(f => ({
                 label: f.label,
-                svg: compiled[labelToBodyIndex.get(f.label)]?.svg || '',
+                svg: svgResults[labelToBodyIndex.get(f.label)] || '',
                 body: f.body,
                 line: f.line,
                 referenced: f.referenced,
                 envType: f.envType
             }));
-            panelProvider.update(panelData);
             formulaBrowser.update(panelData);
-        } else if (!needCompile && parsed.formulas.length > 0) {
-            // 全部命中缓存
-            const cached = readAllFromCache(allHashes, cacheDir);
-            const panelData = parsed.formulas.map((f, i) => ({
-                label: f.label,
-                svg: cached[i]?.svg || '',
-                body: f.body,
-                line: f.line,
-                referenced: f.referenced,
-                envType: f.envType
-            }));
             panelProvider.update(panelData);
-            formulaBrowser.update(panelData);
         } else {
             panelProvider.clear();
             formulaBrowser.clear();
         }
 
         currentPreambleHash = parsed.preambleHash;
-        currentFormulas = parsed.formulas;
+        currentFormulas = formulas;
     } catch (err) {
         console.error('LaTeX Helper: formula refresh failed', err);
         vscode.window.showErrorMessage(`LaTeX Helper: ${err.message}`);
     }
 }
 
-function deactivate() {
-    if (debounceTimer) clearTimeout(debounceTimer);
-}
+function deactivate() {}
 
 module.exports = { activate, deactivate };

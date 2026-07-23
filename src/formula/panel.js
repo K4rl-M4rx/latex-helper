@@ -14,6 +14,8 @@ class FormulaPanelProvider {
         this._formulas = null;
         /** @type {(() => void) | null} */
         this._onClearCache = null;
+        /** @type {((onlyRef: boolean) => void) | null} */
+        this._onToggleOnlyRef = null;
     }
 
     resolveWebviewView(webviewView, _resolveContext, _token) {
@@ -35,6 +37,11 @@ class FormulaPanelProvider {
                     case 'clearCache':
                         if (this._onClearCache) {
                             this._onClearCache();
+                        }
+                        break;
+                    case 'toggleOnlyRef':
+                        if (this._onToggleOnlyRef) {
+                            this._onToggleOnlyRef(message.value);
                         }
                         break;
                 }
@@ -124,6 +131,15 @@ function getPanelHtml(cspSource) {
             color: var(--vscode-descriptionForeground);
             line-height: 1.5;
         }
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .checkbox-row input { cursor: pointer; }
     </style>
 </head>
 <body>
@@ -133,6 +149,10 @@ function getPanelHtml(cspSource) {
     </div>
     <button id="open-btn">Open Formula Browser</button>
     <button id="clear-cache-btn" style="margin-top:6px;background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);">Clear Cache</button>
+    <label class="checkbox-row">
+        <input type="checkbox" id="only-ref-check" />
+        Only referenced formulas
+    </label>
     <div class="hint">
         Click the button above to browse all labeled formulas in a separate tab with search, copy, and drag support.
     </div>
@@ -143,6 +163,9 @@ function getPanelHtml(cspSource) {
         });
         document.getElementById('clear-cache-btn').addEventListener('click', () => {
             vscode.postMessage({ type: 'clearCache' });
+        });
+        document.getElementById('only-ref-check').addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'toggleOnlyRef', value: e.target.checked });
         });
         window.addEventListener('message', event => {
             const msg = event.data;
@@ -245,6 +268,7 @@ function getBrowserHtml(cspSource) {
         <button class="mode-btn active" data-mode="both">Both</button>
         <button class="mode-btn" data-mode="label">Label</button>
         <button class="mode-btn" data-mode="content">Content</button>
+        <button id="refresh-btn" style="padding:5px 12px;border:none;background:var(--vscode-button-background);color:var(--vscode-button-foreground);cursor:pointer;border-radius:2px;font-size:11px;white-space:nowrap;">Refresh</button>
     </div>
     <div class="unref-toggle" id="unref-toggle"></div>
     <div class="count-info" id="count-info"></div>
@@ -270,6 +294,9 @@ function getBrowserHtml(cspSource) {
                 searchMode = btn.dataset.mode;
                 filterFormulas();
             });
+        });
+        document.getElementById('refresh-btn').addEventListener('click', () => {
+            vscode.postMessage({ type: 'refreshFormulas' });
         });
         searchInput.addEventListener('input', filterFormulas);
 

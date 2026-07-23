@@ -16,6 +16,8 @@ class FormulaBrowser {
         this.panel = null;
         /** @type {Array | null} */
         this._pendingFormulas = null;
+        /** @type {(() => void) | null} */
+        this._onRefresh = null;
     }
 
     /**
@@ -49,6 +51,10 @@ class FormulaBrowser {
                         type: 'updateFormulas',
                         formulas: this._pendingFormulas
                     });
+                }
+            } else if (message.type === 'refreshFormulas') {
+                if (this._onRefresh) {
+                    this._onRefresh();
                 }
             } else {
                 handlePanelMessage(message);

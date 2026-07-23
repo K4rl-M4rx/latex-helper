@@ -64,6 +64,11 @@
           "type": "string",
           "default": "dvisvgm",
           "description": "Path to dvisvgm executable"
+        },
+        "latex-helper.auxPath": {
+          "type": "string",
+          "default": "./temp",
+          "description": "Relative path to directory containing auxiliary (.aux) files for reference detection"
         }
       }
     }
