@@ -42,16 +42,16 @@ class FormulaBrowser {
 
         this.panel.webview.html = getBrowserHtml(this.panel.webview.cspSource);
 
-        // 等待 WebView 脚本加载完成（发送 'ready' 消息）后再推送数据
-        const readyListener = this.panel.webview.onDidReceiveMessage(message => {
+        let readySent = false;
+        const msgHandler = this.panel.webview.onDidReceiveMessage(message => {
             if (message.type === 'ready') {
-                readyListener.dispose();
-                if (this._pendingFormulas) {
+                if (!readySent && this._pendingFormulas) {
                     this.panel.webview.postMessage({
                         type: 'updateFormulas',
                         formulas: this._pendingFormulas
                     });
                 }
+                readySent = true;
             } else if (message.type === 'refreshFormulas') {
                 if (this._onRefresh) {
                     this._onRefresh();
@@ -61,9 +61,8 @@ class FormulaBrowser {
             }
         });
 
-        this.context.subscriptions.push(readyListener);
-
         this.panel.onDidDispose(() => {
+            msgHandler.dispose();
             this.panel = null;
         });
     }
@@ -89,6 +88,16 @@ class FormulaBrowser {
         this._pendingFormulas = null;
         if (this.panel) {
             this.panel.webview.postMessage({ type: 'clear' });
+        }
+    }
+
+    /**
+     * 发送任意消息到浏览器 WebView。
+     * @param {*} message
+     */
+    sendMessage(message) {
+        if (this.panel) {
+            this.panel.webview.postMessage(message);
         }
     }
 }

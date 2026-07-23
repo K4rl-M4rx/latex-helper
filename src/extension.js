@@ -31,6 +31,9 @@ let onlyRef = false;
 /** @type {string} */
 let cacheDir = '';
 
+/** @type {boolean} */
+let refreshing = false;
+
 /**
  * @param {vscode.ExtensionContext} context
  */
@@ -161,6 +164,9 @@ function readAuxLabels(document, auxPathConfig) {
  * @param {vscode.TextDocument} document
  */
 async function refreshFormulas(document) {
+    if (refreshing) return;
+    refreshing = true;
+    formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: true, message: 'Compiling...' });
     try {
         const text = document.getText();
         const parsed = parseDocument(text);
@@ -235,9 +241,13 @@ async function refreshFormulas(document) {
 
         currentPreambleHash = parsed.preambleHash;
         currentFormulas = formulas;
+        formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Done' });
     } catch (err) {
         console.error('LaTeX Helper: formula refresh failed', err);
         vscode.window.showErrorMessage(`LaTeX Helper: ${err.message}`);
+        formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Failed' });
+    } finally {
+        refreshing = false;
     }
 }
 

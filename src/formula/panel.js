@@ -311,6 +311,21 @@ function getBrowserHtml(cspSource) {
                     currentFormulas = [];
                     render();
                     break;
+                case 'refreshStatus':
+                    const btn = document.getElementById('refresh-btn');
+                    if (msg.refreshing) {
+                        btn.textContent = msg.message || 'Compiling...';
+                        btn.disabled = true;
+                        btn.style.opacity = '0.6';
+                    } else {
+                        btn.textContent = 'Refresh';
+                        btn.disabled = false;
+                        btn.style.opacity = '1';
+                        // 短暂显示结果
+                        btn.textContent = msg.message || 'Refresh';
+                        setTimeout(() => { btn.textContent = 'Refresh'; }, 1500);
+                    }
+                    break;
             }
         });
 
