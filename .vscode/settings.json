@@ -1,0 +1,22 @@
+{
+    "latex-helper.snippets": [
+        {
+            "prefix": "frac",
+            "body": "\\frac{$$1}{$$2} ",
+            "mode": "maths",
+            "description": "fraction"
+        },
+        {
+            "prefix": "impliedby",
+            "body": "\\impliedby ",
+            "mode": "maths",
+            "description": "implied by"
+        },
+        {
+            "prefix": "bf",
+            "body": "\\textbf{$$1}",
+            "mode": "text",
+            "description": "bold text"
+        }
+    ]
+}

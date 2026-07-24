@@ -13,6 +13,7 @@ const { FormulaBrowser } = require('./formula/browser');
 const { GroupModeTreeProvider } = require('./tree/group-mode');
 const { importSnippets } = require('./snippets/importer');
 const { registerSnippetProvider } = require('./snippets/provider');
+const { LiveSnippetWatcher } = require('./snippets/live-watcher');
 
 /** @type {FormulaPanelProvider} */
 let panelProvider;
@@ -102,6 +103,14 @@ function activate(context) {
 
     // 注册 snippet 补全 Provider
     context.subscriptions.push(registerSnippetProvider(context));
+
+    // 实时 snippet 展开监听
+    const liveWatcher = new LiveSnippetWatcher();
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeTextDocument(event => {
+            liveWatcher.watcher(event);
+        })
+    );
 
     // 注册命令
     context.subscriptions.push(

@@ -40,7 +40,8 @@ async function importSnippets(_context) {
             return;
         }
 
-        // 过滤 + 转换
+        // 过滤 + 转换（保留 triggerWhenComplete / priority / noPlaceholders，
+        // 否则 getLiveSnippets() 为空，实时自动展开完全不工作）
         let skipped = 0;
         const newSnippets = [];
         for (const s of oldSnippets) {
@@ -48,12 +49,16 @@ async function importSnippets(_context) {
                 skipped++;
                 continue;
             }
-            newSnippets.push({
+            const entry = {
                 prefix: s.prefix || '',
                 body: s.body || '',
-                mode: s.mode || 'maths',
+                mode: s.mode || 'any',
                 description: s.description || ''
-            });
+            };
+            if (s.triggerWhenComplete !== undefined) entry.triggerWhenComplete = s.triggerWhenComplete;
+            if (s.priority !== undefined) entry.priority = s.priority;
+            if (s.noPlaceholders !== undefined) entry.noPlaceholders = s.noPlaceholders;
+            newSnippets.push(entry);
         }
 
         await config.update('snippets', newSnippets, vscode.ConfigurationTarget.Global);
@@ -88,25 +93,78 @@ function getSettingsPath() {
 }
 
 /**
+ * 安全地去掉 JSONC 中的注释，保留字符串内部内容。
+ * @param {string} text
+ * @returns {string}
+ */
+function stripJsoncComments(text) {
+    let result = '';
+    let i = 0;
+    while (i < text.length) {
+        const ch = text[i];
+        const next = text[i + 1];
+
+        // 字符串
+        if (ch === '"') {
+            result += ch;
+            i++;
+            while (i < text.length) {
+                const c = text[i];
+                result += c;
+                if (c === '\\' && i + 1 < text.length) {
+                    result += text[i + 1];
+                    i += 2;
+                    continue;
+                }
+                if (c === '"') {
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            continue;
+        }
+
+        // 块注释
+        if (ch === '/' && next === '*') {
+            i += 2;
+            while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) {
+                i++;
+            }
+            i += 2;
+            continue;
+        }
+
+        // 行注释
+        if (ch === '/' && next === '/') {
+            while (i < text.length && text[i] !== '\n') {
+                i++;
+            }
+            continue;
+        }
+
+        result += ch;
+        i++;
+    }
+    return result;
+}
+
+/**
  * 从 settings.json 文本中提取 latex-utilities.liveReformat.snippets 数组。
  * 处理 JSONC（注释 + 尾部逗号）。
  * @param {string} text
  * @returns {Array|null}
  */
 function extractSnippets(text) {
-    // 去掉 // 注释
-    let cleaned = text.replace(/\/\/[^\n]*/g, '');
+    // 安全去掉注释（不破坏字符串内的 // 或 /*）
+    let cleaned = stripJsoncComments(text);
     // 去掉尾部逗号
     cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
-    // 去掉块注释
-    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
 
     try {
         const data = JSON.parse(cleaned);
         return data['latex-utilities.liveReformat.snippets'] || null;
     } catch {
-        // JSON 解析失败时，尝试直接正则提取
-        // 这种情况比较极端，先返回 null
         return null;
     }
 }

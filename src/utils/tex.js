@@ -140,74 +140,204 @@ function findReferences(text) {
 }
 
 /**
- * 检测光标是否在数学环境内。
+ * 模式检测用的环境表（1:1 对齐 latex-utilities typeFinder）。
+ * 注意：原插件不识别 $...$ / $$...$$，只识别 \( \[ 与数学环境。
+ * @type {Object<string, {mode: 'maths'|'text', type: 'start'|'end', pair: string|null}>}
+ */
+const TYPE_ENVS = {
+    '\\(': { mode: 'maths', type: 'start', pair: '\\)' },
+    '\\[': { mode: 'maths', type: 'start', pair: '\\]' },
+    '\\begin{equation}': { mode: 'maths', type: 'start', pair: '\\end{equation}' },
+    '\\begin{displaymath}': { mode: 'maths', type: 'start', pair: '\\end{displaymath}' },
+    '\\begin{align}': { mode: 'maths', type: 'start', pair: '\\end{align}' },
+    '\\begin{gather}': { mode: 'maths', type: 'start', pair: '\\end{gather}' },
+    '\\begin{flalign}': { mode: 'maths', type: 'start', pair: '\\end{flalign}' },
+    '\\begin{multline}': { mode: 'maths', type: 'start', pair: '\\end{multline}' },
+    '\\begin{alignat}': { mode: 'maths', type: 'start', pair: '\\end{alignat}' },
+    '\\begin{split}': { mode: 'maths', type: 'start', pair: '\\end{split}' },
+    '\\text': { mode: 'text', type: 'start', pair: null },
+    '\\begin{document}': { mode: 'text', type: 'start', pair: null },
+    '\\chapter': { mode: 'text', type: 'start', pair: null },
+    '\\section': { mode: 'text', type: 'start', pair: null },
+    '\\subsection': { mode: 'text', type: 'start', pair: null },
+    '\\subsubsection': { mode: 'text', type: 'start', pair: null },
+    '\\paragraph': { mode: 'text', type: 'start', pair: null },
+    '\\subparagraph': { mode: 'text', type: 'start', pair: null }
+};
+
+/** @type {RegExp | null} */
+let ALL_ENV_REGEX = null;
+
+/**
+ * 构建环境 token 正则（对齐原插件 constructEnvRegexs）：
+ * 为 \begin{X} 生成 starred 变体与 \end 配对项，统一进一张表。
+ * @returns {RegExp}
+ */
+function buildEnvRegex() {
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const tokens = [];
+    const beginNames = [];
+    const endNames = [];
+    const beginRe = /\\begin\{(\w+)\}/;
+
+    for (const key of Object.keys(TYPE_ENVS)) {
+        const env = TYPE_ENVS[key];
+        if (env.type === 'end') continue;
+        const m = key.match(beginRe);
+        if (m) {
+            beginNames.push(m[1]);
+            TYPE_ENVS[`\\begin{${m[1]}*}`] = { mode: env.mode, type: 'start', pair: `\\end{${m[1]}*}` };
+            if (env.pair !== null) {
+                endNames.push(m[1]);
+                TYPE_ENVS[`\\end{${m[1]}*}`] = { mode: env.mode, type: 'end', pair: `\\begin{${m[1]}*}` };
+            }
+        } else {
+            tokens.push(esc(key));
+            if (env.pair !== null) tokens.push(esc(env.pair));
+        }
+        if (env.pair !== null) {
+            TYPE_ENVS[env.pair] = { mode: env.mode, type: 'end', pair: key };
+        }
+    }
+    tokens.push(`\\\\begin{(?:${beginNames.join('|')})\\*?}`);
+    tokens.push(`\\\\end{(?:${endNames.join('|')})\\*?}`);
+    return new RegExp(`(?:^|[^\\\\])(${tokens.join('|')})`, 'g');
+}
+
+/**
+ * 去掉行内注释：截断到第一个未被反斜杠转义的 % 。
+ * @param {string} text
+ * @returns {string}
+ */
+function stripComment(text) {
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] === '%') {
+            let backslashes = 0;
+            let j = i - 1;
+            while (j >= 0 && text[j] === '\\') { backslashes++; j--; }
+            if (backslashes % 2 === 0) return text.substring(0, i);
+        }
+    }
+    return text;
+}
+
+/**
+ * 检测光标所在位置的上下文模式。
+ * 从光标所在行【反向】逐行扫描环境 token，遇到决定性 token 即返回，
+ * 通常只扫几行；支持 lastKnown 缓存（对齐原插件 getTypeAtPosition）。
+ * @param {vscode.TextDocument} document
+ * @param {vscode.Position} position
+ * @param {{ position: import('vscode').Position, mode: string } | null} [lastKnown]
+ * @returns {'maths' | 'text'}
+ */
+function getModeAtPosition(document, position, lastKnown) {
+    if (!ALL_ENV_REGEX) ALL_ENV_REGEX = buildEnvRegex();
+
+    let s = position.line;
+    /** @type {string[]} 等待配平的 end token 栈 */
+    const stack = [];
+    let stopLine = 0;
+    let stopChar = -1;
+    if (lastKnown && lastKnown.position.isBefore(position)) {
+        stopLine = lastKnown.position.line;
+        stopChar = lastKnown.position.character;
+    }
+
+    do {
+        let text = document.lineAt(s--).text;
+        const curLine = s + 1;
+        if (curLine === position.line) {
+            text = text.substr(0, position.character + 1);
+        }
+        text = stripComment(text);
+        // 光标落在注释里 → text
+        if (curLine === position.line && position.character > text.length) {
+            return 'text';
+        }
+
+        /** @type {RegExpExecArray[]} */
+        const matches = [];
+        ALL_ENV_REGEX.lastIndex = 0;
+        let m;
+        while ((m = ALL_ENV_REGEX.exec(text)) !== null) {
+            matches.push(m);
+        }
+
+        if (matches.length === 0) {
+            // 本行无 token：可以尝试用 lastKnown 结果
+            if (curLine === stopLine && stopChar >= 0 && lastKnown) {
+                if (stack.length > 0) {
+                    const top = TYPE_ENVS[stack[stack.length - 1]];
+                    if (top.type === 'end' && top.mode === lastKnown.mode) {
+                        stopLine = 0;
+                        continue;
+                    }
+                }
+                return lastKnown.mode;
+            }
+            continue;
+        }
+
+        // 从行尾向行首处理 token
+        matches.reverse();
+        let depth = 0;
+        for (const match of matches) {
+            const name = match[1];
+            const env = TYPE_ENVS[name];
+            if (!env) continue;
+            const tokenStart = match.index + (match[0].length - name.length);
+
+            // \text 特判：token 右侧有大括号包着它（depth>0）→ 光标在 \text{...} 内
+            for (let g = text.length - 1; g >= 0; g--) {
+                if (name === '\\text' && tokenStart === g && depth > 0) {
+                    return env.mode;
+                }
+                if (text[g] === '}') depth--;
+                else if (text[g] === '{') depth++;
+            }
+
+            if (env.type === 'end') {
+                if (env.pair === null) return env.mode;
+                stack.push(name);
+            } else {
+                // 无配对的 start token → 决定模式
+                if ((stack.length === 0 || stack[stack.length - 1] !== env.pair) && name !== '\\text') {
+                    return env.mode;
+                }
+                if (stack.length > 0 && name !== '\\text') {
+                    stack.pop();
+                    if (lastKnown && env.mode === lastKnown.mode) continue;
+                }
+            }
+
+            // 到达 lastKnown 参考点：沿用之前的结论
+            if (curLine === stopLine && tokenStart < stopChar && lastKnown) {
+                if (stack.length > 0) {
+                    const top = TYPE_ENVS[stack[stack.length - 1]];
+                    if (top.type === 'end' && top.mode === lastKnown.mode) {
+                        stopLine = 0;
+                        continue;
+                    }
+                }
+                return lastKnown.mode;
+            }
+        }
+    } while (s >= stopLine);
+
+    return 'text';
+}
+
+/**
+ * 向后兼容：返回 { inMath: boolean, depth: number }
  * @param {vscode.TextDocument} document
  * @param {vscode.Position} position
  * @returns {{inMath: boolean, depth: number}}
  */
 function isInMathContext(document, position) {
-    // 检查从行首到光标位置的文本
-    const lineText = document.lineAt(position).text;
-    const textBefore = lineText.substring(0, position.character);
-
-    // 也考虑前面的行（简化处理：只检查当前行）
-    // 对于跨行公式，需要检查整个文档前缀 — 这里先做轻量实现
-
-    let inMath = false;
-    let depth = 0;
-
-    // State flags
-    let inDollar = false;    // $
-    let inDblDollar = false; // $$
-
-    for (let i = 0; i < textBefore.length; i++) {
-        const ch = textBefore[i];
-
-        // 双 dollar
-        if (ch === '$' && textBefore[i + 1] === '$') {
-            if (!inDollar) {
-                inDblDollar = !inDblDollar;
-            }
-            i++; // skip next $
-            continue;
-        }
-
-        // 单 dollar（避开双 dollar 已处理的）
-        if (ch === '$' && !inDblDollar) {
-            // 转义检测
-            if (i > 0 && textBefore[i - 1] === '\\') continue;
-            inDollar = !inDollar;
-            continue;
-        }
-
-        // \( 和 \)
-        if (ch === '\\' && textBefore[i + 1] === '(') {
-            if (!inDollar && !inDblDollar) depth++;
-            i++;
-            continue;
-        }
-        if (ch === '\\' && textBefore[i + 1] === ')') {
-            if (!inDollar && !inDblDollar && depth > 0) depth--;
-            i++;
-            continue;
-        }
-
-        // \[ 和 \]
-        if (ch === '\\' && textBefore[i + 1] === '[') {
-            if (!inDollar && !inDblDollar) depth++;
-            i++;
-            continue;
-        }
-        if (ch === '\\' && textBefore[i + 1] === ']') {
-            if (!inDollar && !inDblDollar && depth > 0) depth--;
-            i++;
-            continue;
-        }
-    }
-
-    inMath = inDollar || inDblDollar || depth > 0;
-    return { inMath, depth };
+    const mode = getModeAtPosition(document, position);
+    return { inMath: mode === 'maths', depth: mode === 'maths' ? 1 : 0 };
 }
+
 
 /**
  * 查找所有节标题（\section, \subsection, \subsubsection）。
@@ -236,5 +366,6 @@ module.exports = {
     extractLabels,
     findReferences,
     findSections,
+    getModeAtPosition,
     isInMathContext
 };
