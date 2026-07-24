@@ -27,6 +27,10 @@
       {
         "command": "latex-helper.showFormulaBrowser",
         "title": "Show Formula Browser"
+      },
+      {
+        "command": "latex-helper.setGroupMode",
+        "title": "Set Group Mode"
       }
     ],
     "viewsContainers": {

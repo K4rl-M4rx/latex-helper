@@ -11,7 +11,7 @@ const fs = require('fs');
  * @param {vscode.ExtensionContext} context
  * @returns {Promise<void>}
  */
-async function importSnippets(context) {
+async function importSnippets(_context) {
     const config = vscode.workspace.getConfiguration('latex-helper');
     const currentSnippets = config.get('snippets', []);
 

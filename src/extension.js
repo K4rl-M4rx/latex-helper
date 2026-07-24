@@ -5,8 +5,8 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const { parseDocument, deduplicateFormulas, computeHash } = require('./formula/parser');
-const { compileFormulas, checkTool } = require('./formula/compiler');
+const { parseDocument, deduplicateFormulas } = require('./formula/parser');
+const { compileFormulas } = require('./formula/compiler');
 const { getCacheDir, writeCache, clearCache: clearCacheDir } = require('./formula/cache');
 const { FormulaPanelProvider } = require('./formula/panel');
 const { FormulaBrowser } = require('./formula/browser');
@@ -24,7 +24,7 @@ let formulaBrowser;
 let currentPreambleHash = null;
 
 /** @type {Array} */
-let currentFormulas = [];
+let currentFormulas = []; // eslint-disable-line no-unused-vars
 
 /** @type {boolean} */
 let onlyRef = true;
@@ -48,8 +48,6 @@ let queuedRefreshDoc = null;
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    console.log('LaTeX Helper activated');
-
     // 初始化缓存目录
     cacheDir = getCacheDir(context);
 
@@ -154,13 +152,12 @@ function activate(context) {
 }
 
 /**
- * 从 aux 文件中提取所有 \newlabel{name} 标签名。
- * 同时搜索当前 .tex 目录和配置的 auxPath。
+ * 从 aux 文件中提取所有 \newlabel{name} 标签名（当前未使用，保留给多文件项目）。
  * @param {vscode.TextDocument} document
  * @param {string} auxPathConfig
  * @returns {Set<string>}
  */
-function readAuxLabels(document, auxPathConfig) {
+function readAuxLabels(document, auxPathConfig) { // eslint-disable-line no-unused-vars
     const labels = new Set();
     const texDir = path.dirname(document.uri.fsPath);
     const baseName = path.basename(document.uri.fsPath, '.tex');

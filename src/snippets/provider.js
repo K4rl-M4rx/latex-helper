@@ -11,7 +11,7 @@ const { isInMathContext } = require('../utils/tex');
  * @param {vscode.ExtensionContext} context
  * @returns {vscode.Disposable}
  */
-function registerSnippetProvider(context) {
+function registerSnippetProvider(_context) {
     return vscode.languages.registerCompletionItemProvider(
         'latex',
         {
@@ -64,7 +64,7 @@ function registerSnippetProvider(context) {
  */
 function matchPrefix(prefix, linePrefix) {
     // 如果 prefix 看起来像正则（含特殊字符组合），尝试正则匹配
-    if (/[()\[\]|*+?^]/.test(prefix.replace(/^\^/, '').replace(/\$$/, ''))) {
+    if (/[()[\]|*+?^]/.test(prefix.replace(/^\^/, '').replace(/\$$/, ''))) {
         try {
             const re = new RegExp(prefix);
             return re.test(linePrefix);

@@ -66,6 +66,7 @@ function findFormulaEnvironments(text) {
 
         // 用栈匹配对应的 \end{env}
         const endTag = `\\end{${envName}}`;
+        void endTag; // 保留供调试/可读性，lint 忽略
         let depth = 1;
         let searchPos = afterBegin;
         let endPos = -1;
