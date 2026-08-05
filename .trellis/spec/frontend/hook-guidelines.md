@@ -1,51 +1,63 @@
 # Hook Guidelines
 
-> How hooks are used in this project.
+> Custom hooks / reusable async-behavior patterns in this project.
 
 ---
 
 ## Overview
 
-<!--
-Document your project's hook conventions here.
-
-Questions to answer:
-- What custom hooks do you have?
-- How do you handle data fetching?
-- What are the naming conventions?
-- How do you share stateful logic?
--->
-
-(To be filled by the team)
+This is a plain-JS VS Code extension — **no React hooks**. The reusable
+patterns that play that role are documented here instead: event subscription,
+re-entrancy guards, serialized async refresh, and TTL config caching.
 
 ---
 
-## Custom Hook Patterns
+## Event Subscription
 
-<!-- How to create and structure custom hooks -->
+All disposables go through `context.subscriptions.push(...)` in
+`activate()` (`src/extension.js`):
 
-(To be filled by the team)
+```js
+context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument(event => {
+        liveWatcher.watcher(event);
+    })
+);
+```
 
----
+## Re-entrancy Guard (the `isApplyingEdit` pattern)
 
-## Data Fetching
+Any code that edits the document from inside a document-change listener must
+guard against re-triggering itself. Real example: `LiveSnippetWatcher`
+(`src/snippets/live-watcher.js`):
 
-<!-- How data fetching is handled (React Query, SWR, etc.) -->
+```js
+this.isApplyingEdit = true;
+try {
+    await editor.edit(...);
+} finally {
+    this.isApplyingEdit = false;
+}
+```
 
-(To be filled by the team)
+Combined with `sameChanges(event)` (skip events identical to the previous
+one). Any new watcher that applies edits must implement both.
 
----
+## Serialized Async Refresh
 
-## Naming Conventions
+Compilation is slow; concurrent refreshes must not overwrite newer results.
+`requestRefresh()` in `extension.js` serializes with `isRefreshing` +
+`queuedRefreshDoc` (keep only the newest queued document, replay once when
+the current run finishes). New long-running refresh paths must plug into the
+same queue — do not call `refreshFormulas()` directly.
 
-<!-- Hook naming rules (use*, etc.) -->
+## TTL Config Caching
 
-(To be filled by the team)
-
----
+`getSnippets()` in `src/snippets/config.js` caches normalized config for
+`MAX_CONFIG_AGE = 5000` ms (1:1 with latex-utilities) so per-keystroke reads
+don't re-parse settings. Follow this pattern for any hot-path config read.
 
 ## Common Mistakes
 
-<!-- Hook-related mistakes your team has made -->
-
-(To be filled by the team)
+- Spawning parallel compiles per refresh — always go through `requestRefresh`.
+- Applying edits without `isApplyingEdit` → infinite watcher loops.

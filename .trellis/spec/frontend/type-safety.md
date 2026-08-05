@@ -1,51 +1,52 @@
 # Type Safety
 
-> Type safety patterns in this project.
+> Type patterns for a plain-JavaScript codebase (no TypeScript, no build).
 
 ---
 
 ## Overview
 
-<!--
-Document your project's type safety conventions here.
-
-Questions to answer:
-- What type system do you use?
-- How are types organized?
-- What validation library do you use?
-- How do you handle type inference?
--->
-
-(To be filled by the team)
+The project is JavaScript with **JSDoc for types** and `@types/vscode` as the
+only type dependency. `jsconfig.json` enables editor IntelliSense; there is no
+`tsc` step. JSDoc IS the type system here — treat it as load-bearing.
 
 ---
 
-## Type Organization
+## Conventions
 
-<!-- Where types are defined, shared types vs local types -->
+- **Every exported function** carries a JSDoc block with `@param` / `@returns`
+  and concrete shapes:
 
-(To be filled by the team)
+  ```js
+  /**
+   * 编译公式列表为 SVG。
+   * @param {string} preamble
+   * @param {Array<{label: string, body: string}>} formulas
+   * @returns {Promise<Array<{label: string, svg: string}>>}
+   */
+  async function compileFormulas(preamble, formulas) { ... }
+  ```
 
----
+- **Shared data shapes get a `@typedef`** near their producer, referenced via
+  `import('./module').Type` — real example: `NormalizedSnippet` in
+  `src/snippets/config.js`, consumed as
+  `@param {import('./config').NormalizedSnippet snippet}` in
+  `live-watcher.js`.
+- **Nullable fields are typed explicitly**: `@type {vscode.WebviewPanel | null}`.
+- Class fields initialized in the constructor get an inline `@type` JSDoc
+  (see `FormulaBrowser`).
+- Union string enums are written out: `@property {'maths'|'text'|'any'} mode`.
 
 ## Validation
 
-<!-- Runtime validation patterns (Zod, Yup, io-ts, etc.) -->
+- Runtime validation is defensive and local: config normalization
+  (`normalizeSnippets`) coerces/defaults every field and skips malformed
+  entries instead of throwing; webview messages are switched on `type` with
+  unknown types falling through.
+- No schema libraries — keep validation hand-rolled and co-located with the
+  normalization code.
 
-(To be filled by the team)
+## Anti-patterns
 
----
-
-## Common Patterns
-
-<!-- Type utilities, generics, type guards -->
-
-(To be filled by the team)
-
----
-
-## Forbidden Patterns
-
-<!-- any, type assertions, etc. -->
-
-(To be filled by the team)
+- Do not introduce TypeScript or a compile step.
+- Do not leave `@param {any}` — write the object shape inline or add a typedef.

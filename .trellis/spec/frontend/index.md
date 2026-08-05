@@ -1,12 +1,15 @@
 # Frontend Development Guidelines
 
-> Best practices for frontend development in this project.
+> Conventions for this project's UI layer (VS Code extension webviews, plain JS).
 
 ---
 
 ## Overview
 
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
+This project is a **VS Code extension in plain JavaScript (CommonJS)** — no
+framework, no build step. The "frontend" is two webviews (sidebar panel +
+browser tab) plus the extension-host code that feeds them. The guides below
+document the actual conventions in `src/`, with real file references.
 
 ---
 
@@ -14,26 +17,37 @@ This directory contains guidelines for frontend development. Fill in each file w
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
+| [Directory Structure](./directory-structure.md) | Module organization and file layout | Filled |
+| [Component Guidelines](./component-guidelines.md) | Webview HTML generators, CSP, host↔webview messaging | Filled |
+| [Hook Guidelines](./hook-guidelines.md) | Event subscription, re-entrancy guards, refresh queue, config cache | Filled |
+| [State Management](./state-management.md) | workspaceState / host memory / webview-local tiers | Filled |
+| [Quality Guidelines](./quality-guidelines.md) | Lint, hand-rolled tests, parity rule, forbidden patterns | Filled |
+| [Type Safety](./type-safety.md) | JSDoc-as-type-system conventions | Filled |
 
 ---
 
-## How to Fill These Guidelines
+## Pre-Development Checklist
 
-For each guideline file:
+Before writing code in `src/`:
 
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
+1. Read the guide matching your change area (webview work → component +
+   state; watchers/async → hook guidelines).
+2. If the change touches latex-utilities ported behavior, read the
+   **Behavioral Parity Rule** in quality-guidelines first.
+3. Plan to run `npm run lint` and `node test/*.test.js` before committing.
 
-The goal is to help AI assistants and new team members understand how YOUR project works.
+## Quality Check
+
+Before considering work done:
+
+- [ ] ESLint passes on `src/` and `test/`
+- [ ] Existing node test scripts pass; new pure logic has new `check()` cases
+- [ ] JSDoc on every new exported function (concrete shapes, no `any`)
+- [ ] Persisted state mutated only via owning class methods
+- [ ] Webview text escaped; CSP nonce preserved
 
 ---
 
-**Language**: All documentation should be written in **English**.
+**Language**: Documentation in English; code comments and docstrings in
+Chinese (matching the existing codebase); user-facing webview strings in
+English.
