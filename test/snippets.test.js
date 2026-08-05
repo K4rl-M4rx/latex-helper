@@ -14,20 +14,13 @@ Module._cache['vscode-stub'] = {
     exports: {
         workspace: { getConfiguration: () => ({ get: () => [] }) },
         window: {},
-        languages: {},
-        Position: class Position {
-            constructor(line, character) { this.line = line; this.character = character; }
-        },
-        Range: class Range {
-            constructor(start, end) { this.start = start; this.end = end; }
-        }
+        languages: {}
     }
 };
 
 const { getModeAtPosition } = require('../src/utils/tex');
 const { expandBody } = require('../src/snippets/provider');
 const { normalizeSnippets } = require('../src/snippets/config');
-const { getFraction } = require('../src/snippets/live-watcher');
 
 let passed = 0;
 let failed = 0;
@@ -142,7 +135,7 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
         { prefix: 'c$', body: 'C', priority: 5 },                     // 显式 priority 保留
         { prefix: 'd$', body: 'D', noPlaceholders: false },           // 显式 noPlaceholders 保留
         { prefix: 'e$', body: 'E', mode: 'maths', triggerWhenComplete: true },
-        { prefix: 'f$', body: 'SPECIAL_ACTION_BREAK' }                // 特殊动作：保留并标记
+        { prefix: 'f$', body: 'SPECIAL_ACTION_BREAK' }                // 特殊动作被过滤（TODO 支持）
     ]);
     const by = Object.fromEntries(out.map(s => [s.prefix, s]));
     check('无占位符 → noPlaceholders', by['a$'].noPlaceholders, true);
@@ -153,69 +146,9 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
     check('显式 noPlaceholders 保留', by['d$'].noPlaceholders, false);
     check('mode 缺省 → any', by['a$'].mode, 'any');
     check('triggerWhenComplete 保留', by['e$'].triggerWhenComplete, true);
-    check('SPECIAL_ACTION 保留', out.some(s => s.prefix === 'f$'), true);
-    check('SPECIAL_ACTION 标记类型', by['f$'].specialAction, 'BREAK');
-    check('普通条目 specialAction 为 null', by['a$'].specialAction, null);
-    // 排序：priority 5 在最前；-0.1 组按稳定顺序 a,d,e,f，f 在最后
-    check('按 priority 排序（首尾）', [out[0].prefix, out[out.length - 1].prefix].join(','), 'c$,f$');
-}
-
-console.log('== getFraction（SPECIAL_ACTION_FRACTION）==');
-
-function fracLine(text) {
-    return { text, lineNumber: 0 };
-}
-function fracMatch(lineText, prefixRe) {
-    const m = new RegExp(prefixRe).exec(lineText);
-    if (!m) throw new Error('no match: ' + lineText);
-    return m;
-}
-const FRAC_PREFIX = '([\\)\\]\\}])/$';
-
-// "(x+1)/" → "\frac{x+1}{$1} "
-{
-    const line = fracLine('(x+1)/');
-    const match = fracMatch(line.text, FRAC_PREFIX);
-    const [range, replacement] = getFraction(match, line);
-    check('paren fraction 文本', replacement, '\\frac{x+1}{$1} ');
-    check('paren fraction 范围', [range.start.character, range.end.character].join(','), '0,6');
-}
-// "[a+b]/" → "\frac{a+b}{$1} "
-{
-    const line = fracLine('[a+b]/');
-    const match = fracMatch(line.text, FRAC_PREFIX);
-    const [, replacement] = getFraction(match, line);
-    check('bracket fraction 文本', replacement, '\\frac{a+b}{$1} ');
-}
-// "{x+y}/"（无命令）→ "\frac{x+y}{$1} "
-{
-    const line = fracLine('{x+y}/');
-    const match = fracMatch(line.text, FRAC_PREFIX);
-    const [, replacement] = getFraction(match, line);
-    check('brace fraction 文本', replacement, '\\frac{x+y}{$1} ');
-}
-// "\bar{x}/"（吞命令）→ "\frac{\bar{x}}{$1} "
-{
-    const line = fracLine('\\bar{x}/');
-    const match = fracMatch(line.text, FRAC_PREFIX);
-    const [range, replacement] = getFraction(match, line);
-    check('command fraction 文本', replacement, '\\frac{\\bar{x}}{$1} ');
-    check('command fraction 范围', [range.start.character, range.end.character].join(','), '0,8');
-}
-// 嵌套括号 "((a))/" → "\frac{(a)}{$1} "
-{
-    const line = fracLine('((a))/');
-    const match = fracMatch(line.text, FRAC_PREFIX);
-    const [range, replacement] = getFraction(match, line);
-    check('nested paren fraction 文本', replacement, '\\frac{(a)}{$1} ');
-    check('nested paren fraction 范围', [range.start.character, range.end.character].join(','), '0,6');
-}
-// 无配对开括号 → 空替换
-{
-    const line = fracLine('x)/');
-    const match = fracMatch(line.text, FRAC_PREFIX);
-    const [, replacement] = getFraction(match, line);
-    check('unmatched → 空替换', replacement, '');
+    check('SPECIAL_ACTION 被过滤', out.some(s => s.prefix === 'f$'), false);
+    // 排序：priority 5 在最前；e 也无占位符得 -0.1，与 a 同级按稳定顺序 e 在最后
+    check('按 priority 排序（首尾）', [out[0].prefix, out[out.length - 1].prefix].join(','), 'c$,e$');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

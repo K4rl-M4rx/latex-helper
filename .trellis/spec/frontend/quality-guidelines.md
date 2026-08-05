@@ -25,7 +25,8 @@ Hand-rolled node scripts, no framework (`test/*.test.js`):
   script exits non-zero on failure. **Expected values are exact strings** —
   no fuzzy matching.
 - When porting behavior from latex-utilities, tests pin the ported semantics
-  (including documented deliberate deviations, e.g. `getFraction`).
+  (including any documented deliberate deviations recorded in the task's
+  `research/` notes).
 
 ## Behavioral Parity Rule
 
@@ -57,8 +58,8 @@ When touching them:
 
 - No `console.log` in `src/` (debug logging); `console.error` in catch paths
   is fine.
-- No `eval` in extension code (the SYMPY action shells out to python3 with an
-  escaped script via `execFile` — never build shell command strings).
+- No `eval` in extension code, and never build shell command strings from user
+  input — use `execFile` with an argument array.
 - No git-ignored generated files inside `src/`; compile temp files go to the
   workspace `temp/` folder or OS tmpdir (see `compiler.js#getTempBaseDir`).
 - When building a regex from an environment-name list, **escape `*` in names**

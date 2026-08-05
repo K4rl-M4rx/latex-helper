@@ -40,12 +40,17 @@ async function importSnippets(_context) {
             return;
         }
 
-        // 转换（保留 triggerWhenComplete / priority / noPlaceholders，
+        // 过滤 + 转换（保留 triggerWhenComplete / priority / noPlaceholders，
         // 否则 getLiveSnippets() 为空，实时自动展开完全不工作）
-        // SPECIAL_ACTION 条目（FRACTION / BREAK / SYMPY）同样导入，
-        // 由 live-watcher 按动作类型处理
+        // SPECIAL_ACTION 条目（FRACTION / BREAK / SYMPY）暂不支持（TODO），跳过；
+        // 语义调研见 .trellis/tasks/07-26-special-action-support/research/
+        let skipped = 0;
         const newSnippets = [];
         for (const s of oldSnippets) {
+            if (s.body && s.body.includes('SPECIAL_ACTION')) {
+                skipped++;
+                continue;
+            }
             const entry = {
                 prefix: s.prefix || '',
                 body: s.body || '',
@@ -61,7 +66,8 @@ async function importSnippets(_context) {
         await config.update('snippets', newSnippets, vscode.ConfigurationTarget.Global);
 
         vscode.window.showInformationMessage(
-            `Imported ${newSnippets.length} snippets from latex-utilities`
+            `Imported ${newSnippets.length} snippets from latex-utilities` +
+            (skipped > 0 ? ` (${skipped} SPECIAL_ACTION entries skipped — TODO)` : '')
         );
     } catch (err) {
         vscode.window.showErrorMessage(`Failed to import snippets: ${err.message}`);
