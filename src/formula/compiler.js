@@ -161,6 +161,23 @@ function convertToSVG(dviPath, outputDir, pageCount) {
 }
 
 /**
+ * 编译临时目录的父目录：优先用工作区根目录下的 temp/（方便排查编译产物），
+ * 无工作区或创建失败时回退到系统临时目录。
+ * @returns {string}
+ */
+function getTempBaseDir() {
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (folder) {
+        const base = path.join(folder, 'temp');
+        try {
+            fs.mkdirSync(base, { recursive: true });
+            return base;
+        } catch { /* 回退到系统临时目录 */ }
+    }
+    return os.tmpdir();
+}
+
+/**
  * 编译公式列表为 SVG。
  * @param {string} preamble
  * @param {Array<{label: string, body: string}>} formulas
@@ -169,7 +186,7 @@ function convertToSVG(dviPath, outputDir, pageCount) {
 async function compileFormulas(preamble, formulas) {
     if (formulas.length === 0) return [];
 
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'latex-helper-'));
+    const workDir = fs.mkdtempSync(path.join(getTempBaseDir(), 'latex-helper-'));
     try {
         const texContent = buildStandaloneDoc(preamble, formulas);
         const dviPath = await runLatex(texContent, workDir);
