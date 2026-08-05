@@ -301,18 +301,24 @@ function getBrowserHtml(cspSource) {
             position: absolute;
             top: 6px;
             right: 6px;
-            border: none;
-            background: transparent;
+            border: 1px solid var(--vscode-panel-border);
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
             cursor: pointer;
-            font-size: 13px;
+            font-size: 12px;
             line-height: 1;
-            padding: 2px;
-            border-radius: 3px;
-            opacity: 0.25;
+            padding: 4px 6px;
+            border-radius: 4px;
+            opacity: 0.55;
         }
-        .formula-item:hover .pin-btn { opacity: 0.7; }
-        .pin-btn.pinned { opacity: 1; }
-        .pin-btn:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
+        .formula-item:hover .pin-btn { opacity: 1; }
+        .pin-btn.pinned {
+            opacity: 1;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border-color: var(--vscode-button-background);
+        }
+        .pin-btn:hover { background: var(--vscode-button-hoverBackground); color: var(--vscode-button-foreground); }
         .formula-item:hover { background: var(--vscode-list-hoverBackground); }
         .formula-item.hidden { display: none; }
         .formula-item .svg-wrap {
@@ -601,14 +607,21 @@ function getBrowserHtml(cspSource) {
             const div = document.createElement('div');
             div.className = 'formula-item' + (t.referenced ? '' : ' unreferenced');
             div.draggable = true;
-            div.title = 'Click to copy label, drag to insert \\\\ref | Cmd/Ctrl+drag for source';
+            div.title = 'Click: copy label | Cmd/Ctrl+click: copy source | drag: insert \\\\ref | Cmd/Ctrl+drag: insert source';
             let html = '<div class="thm-head"><span class="thm-env">' + escapeHtml(t.envType) + '</span><span class="label">' + escapeHtml(t.label) + '</span></div>';
             if (t.note) html += '<div class="thm-note">[' + escapeHtml(t.note) + ']</div>';
             if (t.preview) html += '<div class="thm-preview">' + escapeHtml(t.preview) + '</div>';
             const sectionInfo = (t.section ? '§' + t.section : '') + (t.subsection ? ' › ' + t.subsection : '');
             html += '<div class="formula-meta"><span class="line">L' + t.line + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
             div.innerHTML = html;
-            div.addEventListener('click', () => { vscode.postMessage({ type: 'copyLabel', label: t.label }); });
+            div.addEventListener('click', (e) => {
+                if (e.metaKey || e.ctrlKey) {
+                    // 修饰键 + 单击：复制环境源码
+                    vscode.postMessage({ type: 'copyBody', label: t.label, body: t.body });
+                } else {
+                    vscode.postMessage({ type: 'copyLabel', label: t.label });
+                }
+            });
             div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: t.line }); });
             div.addEventListener('dragstart', e => {
                 // 默认拖拽插入 \ref{label}；Cmd/Ctrl+拖拽插入环境源码
@@ -758,7 +771,7 @@ function getBrowserHtml(cspSource) {
             const div = document.createElement('div');
             div.className = 'formula-item' + (f.referenced ? '' : ' unreferenced') + (hidden ? ' hidden' : '');
             div.draggable = true;
-            div.title = 'Click to copy label, drag to insert | Cmd/Ctrl+double-click or drag for formula source';
+            div.title = 'Click: copy label | Cmd/Ctrl+click: copy source | drag: insert label | Cmd/Ctrl+drag: insert source';
             let svgHtml = '';
             if (f.svg && f.svg.length > 50) {
                 svgHtml = '<div class="svg-wrap">' + injectWhiteBackground(f.svg) + '</div>';
@@ -769,16 +782,16 @@ function getBrowserHtml(cspSource) {
             }
             const sectionInfo = (f.section ? '§' + f.section : '') + (f.subsection ? ' › ' + f.subsection : '');
             div.innerHTML = svgHtml + '<div class="formula-meta"><span class="label">' + escapeHtml(f.label) + '</span><span class="line">L' + f.line + ' | ' + escapeHtml(f.envType) + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
-            div.addEventListener('click', () => { vscode.postMessage({ type: 'copyLabel', label: f.label }); vscode.postMessage({ type: 'formulaUsed', label: f.label }); });
-            div.addEventListener('dblclick', (e) => {
+            div.addEventListener('click', (e) => {
                 if (e.metaKey || e.ctrlKey) {
-                    // 修饰键 + 双击：直接复制公式源码
+                    // 修饰键 + 单击：复制公式源码
                     vscode.postMessage({ type: 'copyBody', label: f.label, body: f.body });
-                    vscode.postMessage({ type: 'formulaUsed', label: f.label });
                 } else {
-                    vscode.postMessage({ type: 'gotoLine', line: f.line });
+                    vscode.postMessage({ type: 'copyLabel', label: f.label });
                 }
+                vscode.postMessage({ type: 'formulaUsed', label: f.label });
             });
+            div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: f.line }); });
             div.addEventListener('dragstart', e => {
                 // 修饰键 + 拖拽：插入公式源码；否则插入 label
                 const text = (e.metaKey || e.ctrlKey) ? f.body : f.label;

@@ -38,7 +38,7 @@
         {
           "id": "latex-helper",
           "title": "LaTeX Helper",
-          "icon": "$(symbol-misc)"
+          "icon": "icons/icon.svg"
         }
       ]
     },
