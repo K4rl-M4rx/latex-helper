@@ -68,6 +68,10 @@ function activate(context) {
             requestRefresh(activeLatexDoc);
         }
     };
+    panelProvider._onToggleShowRecent = (value) => {
+        // 持久化 + 通知浏览器 WebView 由 FormulaBrowser 内部完成
+        formulaBrowser._setShowRecent(value);
+    };
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('latex-helper.formulaPanel', panelProvider, {
             webviewOptions: { retainContextWhenHidden: true }
@@ -329,11 +333,12 @@ async function refreshFormulas(document) {
                 section: f.section || '',
                 subsection: f.subsection || ''
             }));
-            formulaBrowser.update(panelData);
+            formulaBrowser.update(panelData, parsed.theorems);
             panelProvider.update(panelData);
         } else {
             panelProvider.clear();
-            formulaBrowser.clear();
+            // 无公式不代表无定理：清空公式列表但保留定理视图数据
+            formulaBrowser.update([], parsed.theorems);
         }
 
         currentPreambleHash = parsed.preambleHash;

@@ -18,6 +18,29 @@ const MATH_ENVIRONMENTS = [
 ];
 
 /**
+ * 内置的定理类环境名列表（starred 变体由 \newtheorem 解析与正则一并覆盖）。
+ */
+const THEOREM_ENVIRONMENTS = [
+    'theorem', 'lemma', 'proposition', 'corollary', 'definition',
+    'remark', 'example', 'claim', 'conjecture', 'notation', 'assumption'
+];
+
+/**
+ * 从 preamble 中解析 \newtheorem{env}... 与 \newtheorem*{env}... 声明的自定义环境名。
+ * @param {string} preamble
+ * @returns {string[]}
+ */
+function extractNewtheoremNames(preamble) {
+    const names = [];
+    const re = /\\newtheorem\*?\{([^}]+)\}/g;
+    let match;
+    while ((match = re.exec(preamble)) !== null) {
+        names.push(match[1]);
+    }
+    return names;
+}
+
+/**
  * 提取 preamble（\documentclass → \begin{document} 之间）。
  * @param {string} text
  * @returns {string}
@@ -45,18 +68,20 @@ function getDefaultPreamble() {
 }
 
 /**
- * 查找所有公式环境块。
+ * 查找指定环境名集合的所有环境块（允许嵌套）。
  * @param {string} text
+ * @param {string[]} envNames
  * @returns {Array<{env: string, body: string, startLine: number, endLine: number}>}
  */
-function findFormulaEnvironments(text) {
+function findEnvironments(text, envNames) {
     const results = [];
 
-    // 构建环境名正则
-    const envNames = MATH_ENVIRONMENTS.join('|');
+    // 构建环境名正则（* 需转义）
+    const escaped = envNames.map(n => n.replace(/\*/g, '\\*'));
+    const envPattern = escaped.join('|');
 
     // 匹配 \begin{env}...\end{env}（允许嵌套）
-    const beginRe = new RegExp(`\\\\begin\\{(${envNames})\\}`, 'g');
+    const beginRe = new RegExp(`\\\\begin\\{(${envPattern})\\}`, 'g');
 
     let match;
     while ((match = beginRe.exec(text)) !== null) {
@@ -65,14 +90,11 @@ function findFormulaEnvironments(text) {
         const afterBegin = beginPos + match[0].length;
 
         // 用栈匹配对应的 \end{env}
-        const endTag = `\\end{${envName}}`;
-        void endTag; // 保留供调试/可读性，lint 忽略
         let depth = 1;
-        let searchPos = afterBegin;
         let endPos = -1;
 
-        const innerBeginRe = new RegExp(`\\\\begin\\{(${envNames})\\}|\\\\end\\{${envName.replace(/\*/g, '\\*')}\\}`, 'g');
-        innerBeginRe.lastIndex = searchPos;
+        const innerBeginRe = new RegExp(`\\\\begin\\{(${envPattern})\\}|\\\\end\\{${envName.replace(/\*/g, '\\*')}\\}`, 'g');
+        innerBeginRe.lastIndex = afterBegin;
 
         let innerMatch;
         while ((innerMatch = innerBeginRe.exec(text)) !== null) {
@@ -97,6 +119,15 @@ function findFormulaEnvironments(text) {
     }
 
     return results;
+}
+
+/**
+ * 查找所有公式环境块。
+ * @param {string} text
+ * @returns {Array<{env: string, body: string, startLine: number, endLine: number}>}
+ */
+function findFormulaEnvironments(text) {
+    return findEnvironments(text, MATH_ENVIRONMENTS);
 }
 
 /**
@@ -361,7 +392,10 @@ function findSections(text) {
 
 module.exports = {
     extractPreamble,
+    findEnvironments,
     findFormulaEnvironments,
+    extractNewtheoremNames,
+    THEOREM_ENVIRONMENTS,
     extractLabel,
     extractLabels,
     findReferences,

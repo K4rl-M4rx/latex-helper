@@ -1,9 +1,13 @@
 /**
- * TeX 文档解析：提取 preamble、公式环境、label、引用关系。
+ * TeX 文档解析：提取 preamble、公式环境、定理类环境、label、引用关系。
  */
 
 const crypto = require('crypto');
-const { extractPreamble, findFormulaEnvironments, extractLabels, findReferences, findSections } = require('../utils/tex');
+const {
+    extractPreamble, findFormulaEnvironments, findEnvironments,
+    extractNewtheoremNames, THEOREM_ENVIRONMENTS,
+    extractLabels, findReferences, findSections
+} = require('../utils/tex');
 
 /**
  * @param {string} text - .tex 文件全文
@@ -17,6 +21,17 @@ const { extractPreamble, findFormulaEnvironments, extractLabels, findReferences,
  *     envType: string,
  *     line: number,
  *     referenced: boolean
+ *   }>,
+ *   theorems: Array<{
+ *     label: string,
+ *     body: string,
+ *     envType: string,
+ *     note: string,
+ *     preview: string,
+ *     line: number,
+ *     referenced: boolean,
+ *     section: string,
+ *     subsection: string
  *   }>
  * }}
  */
@@ -36,19 +51,7 @@ function parseDocument(text) {
         if (labels.length === 0) continue; // 跳过无 label 的公式
 
         const bodyHash = computeHash(env.body);
-
-        // 找最近的 section 和 subsection
-        let section = '';
-        let subsection = '';
-        for (const sec of sections) {
-            if (sec.line <= env.startLine) {
-                if (sec.level === 1) { section = sec.title; subsection = ''; }
-                else if (sec.level === 2) { subsection = sec.title; }
-                else if (sec.level === 3) { /* subsubsection 暂不计入 subsection */ }
-            } else {
-                break;
-            }
-        }
+        const { section, subsection } = locateSection(sections, env.startLine);
 
         for (const label of labels) {
             formulas.push({
@@ -64,7 +67,86 @@ function parseDocument(text) {
         }
     }
 
-    return { preamble, preambleHash, formulas };
+    // 定理类环境：内置名 + preamble 中 \newtheorem 声明的自定义名
+    const theoremEnvNames = [...THEOREM_ENVIRONMENTS, ...extractNewtheoremNames(preamble)];
+    const theoremEnvs = findEnvironments(text, theoremEnvNames);
+
+    /** @type {Array} */
+    const theorems = [];
+
+    for (const env of theoremEnvs) {
+        const labels = extractLabels(env.body);
+        if (labels.length === 0) continue; // 只收录带 label 的环境
+
+        const { section, subsection } = locateSection(sections, env.startLine);
+        const note = extractEnvNote(env.body);
+        const preview = makePreview(env.body);
+
+        for (const label of labels) {
+            theorems.push({
+                label,
+                body: env.body,
+                envType: env.env,
+                note,
+                preview,
+                line: env.startLine,
+                referenced: refs.has(label),
+                section,
+                subsection
+            });
+        }
+    }
+
+    return { preamble, preambleHash, formulas, theorems };
+}
+
+/**
+ * 找某个环境行号之前最近的 section / subsection。
+ * @param {Array<{title: string, level: number, line: number}>} sections
+ * @param {number} envLine
+ * @returns {{section: string, subsection: string}}
+ */
+function locateSection(sections, envLine) {
+    let section = '';
+    let subsection = '';
+    for (const sec of sections) {
+        if (sec.line <= envLine) {
+            if (sec.level === 1) { section = sec.title; subsection = ''; }
+            else if (sec.level === 2) { subsection = sec.title; }
+            else if (sec.level === 3) { /* subsubsection 暂不计入 subsection */ }
+        } else {
+            break;
+        }
+    }
+    return { section, subsection };
+}
+
+/**
+ * 提取环境 begin 行的 optional argument：\begin{theorem}[Title] → "Title"。
+ * @param {string} body
+ * @returns {string}
+ */
+function extractEnvNote(body) {
+    const match = /^\\begin\{[^}]+\}\[([^\]]*)\]/.exec(body);
+    return match ? match[1].trim() : '';
+}
+
+/**
+ * 生成正文预览：去掉 begin/end 标签、\label、命令与括号，压缩空白后截断。
+ * @param {string} body
+ * @param {number} [maxLen]
+ * @returns {string}
+ */
+function makePreview(body, maxLen = 100) {
+    const text = body
+        .replace(/\\begin\{[^}]+\}(\[[^\]]*\])?/, '')
+        .replace(/\\end\{[^}]+\}/, '')
+        .replace(/\\label\{[^}]*\}/g, '')
+        .replace(/\\[a-zA-Z]+/g, '')
+        .replace(/[{}$&_^]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
 }
 
 /**

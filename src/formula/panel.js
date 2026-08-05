@@ -16,6 +16,8 @@ class FormulaPanelProvider {
         this._onClearCache = null;
         /** @type {((onlyRef: boolean) => void) | null} */
         this._onToggleOnlyRef = null;
+        /** @type {((showRecent: boolean) => void) | null} */
+        this._onToggleShowRecent = null;
     }
 
     resolveWebviewView(webviewView, _resolveContext, _token) {
@@ -44,11 +46,22 @@ class FormulaPanelProvider {
                             this._onToggleOnlyRef(message.value);
                         }
                         break;
+                    case 'toggleShowRecent':
+                        if (this._onToggleShowRecent) {
+                            this._onToggleShowRecent(message.value);
+                        }
+                        break;
                 }
             },
             undefined,
             this.context.subscriptions
         );
+
+        // 同步 Recently Used 开关的持久化状态到 checkbox
+        webviewView.webview.postMessage({
+            type: 'showRecentState',
+            value: this.context.workspaceState.get('latex-helper.showRecentFormulas', true)
+        });
 
         // 如果有缓存的公式数据，立即更新计数
         if (this._formulas) {
@@ -153,6 +166,10 @@ function getPanelHtml(cspSource) {
         <input type="checkbox" id="only-ref-check" checked />
         Only referenced formulas
     </label>
+    <label class="checkbox-row">
+        <input type="checkbox" id="show-recent-check" checked />
+        Show Recently Used
+    </label>
     <div class="hint">
         Click the button above to browse all labeled formulas in a separate tab with search, copy, and drag support.
     </div>
@@ -167,11 +184,16 @@ function getPanelHtml(cspSource) {
         document.getElementById('only-ref-check').addEventListener('change', (e) => {
             vscode.postMessage({ type: 'toggleOnlyRef', value: e.target.checked });
         });
+        document.getElementById('show-recent-check').addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'toggleShowRecent', value: e.target.checked });
+        });
         window.addEventListener('message', event => {
             const msg = event.data;
             if (msg.type === 'updateCount') {
                 document.getElementById('total-count').textContent = msg.total;
                 document.getElementById('ref-count').textContent = msg.referenced;
+            } else if (msg.type === 'showRecentState') {
+                document.getElementById('show-recent-check').checked = msg.value !== false;
             }
         });
     </script>
@@ -233,14 +255,64 @@ function getBrowserHtml(cspSource) {
             white-space: nowrap;
         }
         .mode-btn.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
+        .view-btn {
+            padding: 5px 10px;
+            border: 1px solid var(--vscode-input-border);
+            background: transparent;
+            color: var(--vscode-foreground);
+            cursor: pointer;
+            border-radius: 2px;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        .view-btn.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
+        .thm-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .thm-env {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: var(--vscode-badge-background);
+            color: var(--vscode-badge-foreground);
+        }
+        .thm-head .label { font-family: var(--vscode-editor-font-family); color: var(--vscode-textLink-foreground); font-size: 12px; }
+        .thm-note { font-size: 11px; font-style: italic; margin-bottom: 4px; }
+        .thm-preview {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            line-height: 1.4;
+            margin-bottom: 6px;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
         .formula-list { display: flex; flex-direction: column; gap: 10px; }
         .formula-item {
+            position: relative;
             border: 1px solid var(--vscode-panel-border);
             border-radius: 4px;
             padding: 10px;
             cursor: pointer;
             transition: background 0.15s;
         }
+        .pin-btn {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            font-size: 13px;
+            line-height: 1;
+            padding: 2px;
+            border-radius: 3px;
+            opacity: 0.25;
+        }
+        .formula-item:hover .pin-btn { opacity: 0.7; }
+        .pin-btn.pinned { opacity: 1; }
+        .pin-btn:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
         .formula-item:hover { background: var(--vscode-list-hoverBackground); }
         .formula-item.hidden { display: none; }
         .formula-item .svg-wrap {
@@ -295,10 +367,13 @@ function getBrowserHtml(cspSource) {
 </head>
 <body>
     <div class="search-bar">
+        <button class="view-btn active" data-view="formulas">Formulas</button>
+        <button class="view-btn" data-view="theorems">Theorems</button>
         <input type="text" id="search-input" placeholder="Search formulas..." />
         <button class="mode-btn active" data-mode="both">Both</button>
         <button class="mode-btn" data-mode="label">Label</button>
         <button class="mode-btn" data-mode="content">Content</button>
+        <button class="mode-btn" id="pin-filter-btn" title="Show only pinned formulas">📌 Pinned</button>
         <button id="refresh-btn" style="padding:5px 12px;border:none;background:var(--vscode-button-background);color:var(--vscode-button-foreground);cursor:pointer;border-radius:2px;font-size:11px;white-space:nowrap;">Refresh</button>
     </div>
     <div class="unref-toggle" id="unref-toggle"></div>
@@ -309,11 +384,21 @@ function getBrowserHtml(cspSource) {
         const vscode = acquireVsCodeApi();
         vscode.postMessage({ type: 'ready' });
         let currentFormulas = [];
+        // 定理类环境条目，由扩展端解析推送（无需编译）
+        let currentTheorems = [];
+        // 当前视图：formulas | theorems（会话内状态）
+        let currentView = 'formulas';
         let searchMode = 'both';
         let showUnreferenced = true;
         let groupMode = 'section';
         // 最近使用的公式 label（最多 5 个，最新在前），由扩展端持久化并推送
         let recentLabels = [];
+        // 置顶的公式 label，由扩展端持久化并推送
+        let pinnedLabels = [];
+        // Recently Used 分组显示开关，由扩展端持久化并推送
+        let showRecent = true;
+        // 工具栏 Pinned 过滤按钮：开启后列表只显示置顶公式（会话内状态，不持久化）
+        let showPinnedOnly = false;
         const collapsedGroups = {};
         // 切换分类方式后，所有分组默认收缩；用户手动点击后以其选择为准
         let defaultCollapsed = false;
@@ -329,12 +414,29 @@ function getBrowserHtml(cspSource) {
         const unrefToggle = document.getElementById('unref-toggle');
         const countInfo = document.getElementById('count-info');
 
-        document.querySelectorAll('.mode-btn').forEach(btn => {
+        document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.mode-btn[data-mode]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 searchMode = btn.dataset.mode;
                 filterFormulas();
+            });
+        });
+        // 工具栏 Pinned 过滤按钮：切换"只显示置顶公式"
+        document.getElementById('pin-filter-btn').addEventListener('click', () => {
+            showPinnedOnly = !showPinnedOnly;
+            document.getElementById('pin-filter-btn').classList.toggle('active', showPinnedOnly);
+            filterFormulas();
+        });
+        // 视图切换：Formulas | Theorems
+        document.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (btn.dataset.view === currentView) return;
+                document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentView = btn.dataset.view;
+                searchInput.placeholder = currentView === 'theorems' ? 'Search theorems...' : 'Search formulas...';
+                render();
             });
         });
         document.getElementById('refresh-btn').addEventListener('click', () => {
@@ -347,14 +449,24 @@ function getBrowserHtml(cspSource) {
             switch (msg.type) {
                 case 'updateFormulas':
                     currentFormulas = msg.formulas || [];
+                    currentTheorems = msg.theorems || [];
                     render();
                     break;
                 case 'recentFormulas':
                     recentLabels = msg.labels || [];
                     render();
                     break;
+                case 'pinnedFormulas':
+                    pinnedLabels = msg.labels || [];
+                    render();
+                    break;
+                case 'showRecentFormulas':
+                    showRecent = msg.value !== false;
+                    render();
+                    break;
                 case 'clear':
                     currentFormulas = [];
+                    currentTheorems = [];
                     render();
                     break;
                 case 'refreshStatus':
@@ -386,7 +498,14 @@ function getBrowserHtml(cspSource) {
         });
 
         function render() {
+            if (currentView === 'theorems') {
+                renderTheorems();
+                return;
+            }
+            // Pinned 过滤按钮只在公式视图可用
+            document.getElementById('pin-filter-btn').style.display = '';
             if (currentFormulas.length === 0) {
+                emptyState.textContent = 'No labeled formulas found';
                 emptyState.style.display = 'block';
                 formulaList.innerHTML = '';
                 unrefToggle.style.display = 'none';
@@ -409,12 +528,95 @@ function getBrowserHtml(cspSource) {
         function filterFormulas() {
             const query = searchInput.value.toLowerCase().trim();
             formulaList.innerHTML = '';
-            appendRecentGroup(query);
+            if (showPinnedOnly) {
+                appendPinnedOnly(query);
+                return;
+            }
+            if (showRecent) appendRecentGroup(query);
             if (groupMode === 'subsection') {
                 groupBySubsection(query);
             } else {
                 groupBySectionOnly(query);
             }
+        }
+
+        // Pinned 过滤模式：平铺显示所有置顶公式（保持 pin 的顺序，最新置顶在前）
+        function appendPinnedOnly(query) {
+            const items = [];
+            for (const label of pinnedLabels) {
+                const f = currentFormulas.find(x => x.label === label);
+                if (!f) continue;
+                if (query !== '' && !matchFormula(f, query)) continue;
+                items.push(f);
+            }
+            if (items.length === 0) {
+                formulaList.innerHTML = '<div class="empty-state">No pinned formulas</div>';
+                return;
+            }
+            const body = document.createElement('div');
+            body.className = 'section-body';
+            items.forEach(f => { body.appendChild(createFormulaElement(f, false)); });
+            formulaList.appendChild(body);
+        }
+
+        // ---- Theorems 视图 ----
+        function renderTheorems() {
+            // Pinned 过滤与 Unreferenced 开关只属于公式视图
+            document.getElementById('pin-filter-btn').style.display = 'none';
+            unrefToggle.style.display = 'none';
+            if (currentTheorems.length === 0) {
+                emptyState.textContent = 'No labeled theorem environments found';
+                emptyState.style.display = 'block';
+                formulaList.innerHTML = '';
+                countInfo.style.display = 'none';
+                return;
+            }
+            emptyState.style.display = 'none';
+            const query = searchInput.value.toLowerCase().trim();
+            const map = {};
+            const order = [];
+            currentTheorems.forEach(t => {
+                if (query !== '' && !matchTheorem(t, query)) return;
+                const key = t.envType || 'other';
+                if (!map[key]) { map[key] = []; order.push(key); }
+                map[key].push(t);
+            });
+            countInfo.textContent = currentTheorems.length + ' theorem environments';
+            countInfo.style.display = 'block';
+            formulaList.innerHTML = '';
+            if (order.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching theorems</div>'; return; }
+            order.forEach(env => {
+                formulaList.appendChild(makeCollapsible(env, map[env], 'section', createTheoremElement));
+            });
+        }
+
+        function matchTheorem(t, query) {
+            return t.label.toLowerCase().includes(query) ||
+                (t.envType || '').toLowerCase().includes(query) ||
+                (t.note || '').toLowerCase().includes(query) ||
+                (t.preview || '').toLowerCase().includes(query);
+        }
+
+        function createTheoremElement(t) {
+            const div = document.createElement('div');
+            div.className = 'formula-item' + (t.referenced ? '' : ' unreferenced');
+            div.draggable = true;
+            div.title = 'Click to copy label, drag to insert \\\\ref | Cmd/Ctrl+drag for source';
+            let html = '<div class="thm-head"><span class="thm-env">' + escapeHtml(t.envType) + '</span><span class="label">' + escapeHtml(t.label) + '</span></div>';
+            if (t.note) html += '<div class="thm-note">[' + escapeHtml(t.note) + ']</div>';
+            if (t.preview) html += '<div class="thm-preview">' + escapeHtml(t.preview) + '</div>';
+            const sectionInfo = (t.section ? '§' + t.section : '') + (t.subsection ? ' › ' + t.subsection : '');
+            html += '<div class="formula-meta"><span class="line">L' + t.line + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
+            div.innerHTML = html;
+            div.addEventListener('click', () => { vscode.postMessage({ type: 'copyLabel', label: t.label }); });
+            div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: t.line }); });
+            div.addEventListener('dragstart', e => {
+                // 默认拖拽插入 \ref{label}；Cmd/Ctrl+拖拽插入环境源码
+                const text = (e.metaKey || e.ctrlKey) ? t.body : '\\\\ref{' + t.label + '}';
+                e.dataTransfer.setData('text/plain', text);
+                e.dataTransfer.effectAllowed = 'copy';
+            });
+            return div;
         }
 
         // 最近使用分组：固定在列表顶部，公式仍同时保留在原有分类中
@@ -508,7 +710,8 @@ function getBrowserHtml(cspSource) {
             return order.map(k => [k, map[k]]);
         }
 
-        function makeCollapsible(title, formulas, level) {
+        function makeCollapsible(title, formulas, level, createEl) {
+            const makeEl = createEl || (f => createFormulaElement(f, false));
             const key = level + ':' + title;
             const div = document.createElement('div');
             div.className = 'section-group';
@@ -535,7 +738,7 @@ function getBrowserHtml(cspSource) {
             body.className = 'section-body';
             if (collapsed) body.style.display = 'none';
             if (Array.isArray(formulas)) {
-                formulas.forEach(f => { body.appendChild(createFormulaElement(f, false)); });
+                formulas.forEach(f => { body.appendChild(makeEl(f)); });
             }
             div.appendChild(body);
             return div;
@@ -555,7 +758,7 @@ function getBrowserHtml(cspSource) {
             const div = document.createElement('div');
             div.className = 'formula-item' + (f.referenced ? '' : ' unreferenced') + (hidden ? ' hidden' : '');
             div.draggable = true;
-            div.title = 'Click to copy label, drag to insert';
+            div.title = 'Click to copy label, drag to insert | Cmd/Ctrl+double-click or drag for formula source';
             let svgHtml = '';
             if (f.svg && f.svg.length > 50) {
                 svgHtml = '<div class="svg-wrap">' + injectWhiteBackground(f.svg) + '</div>';
@@ -567,8 +770,34 @@ function getBrowserHtml(cspSource) {
             const sectionInfo = (f.section ? '§' + f.section : '') + (f.subsection ? ' › ' + f.subsection : '');
             div.innerHTML = svgHtml + '<div class="formula-meta"><span class="label">' + escapeHtml(f.label) + '</span><span class="line">L' + f.line + ' | ' + escapeHtml(f.envType) + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
             div.addEventListener('click', () => { vscode.postMessage({ type: 'copyLabel', label: f.label }); vscode.postMessage({ type: 'formulaUsed', label: f.label }); });
-            div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: f.line }); });
-            div.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', f.label); e.dataTransfer.effectAllowed = 'copy'; vscode.postMessage({ type: 'formulaUsed', label: f.label }); });
+            div.addEventListener('dblclick', (e) => {
+                if (e.metaKey || e.ctrlKey) {
+                    // 修饰键 + 双击：直接复制公式源码
+                    vscode.postMessage({ type: 'copyBody', label: f.label, body: f.body });
+                    vscode.postMessage({ type: 'formulaUsed', label: f.label });
+                } else {
+                    vscode.postMessage({ type: 'gotoLine', line: f.line });
+                }
+            });
+            div.addEventListener('dragstart', e => {
+                // 修饰键 + 拖拽：插入公式源码；否则插入 label
+                const text = (e.metaKey || e.ctrlKey) ? f.body : f.label;
+                e.dataTransfer.setData('text/plain', text);
+                e.dataTransfer.effectAllowed = 'copy';
+                vscode.postMessage({ type: 'formulaUsed', label: f.label });
+            });
+            // pin 按钮：切换置顶；不触发卡片的复制/拖拽
+            const pinBtn = document.createElement('button');
+            const isPinned = pinnedLabels.includes(f.label);
+            pinBtn.className = 'pin-btn' + (isPinned ? ' pinned' : '');
+            pinBtn.textContent = '📌';
+            pinBtn.title = isPinned ? 'Unpin formula' : 'Pin formula';
+            pinBtn.addEventListener('mousedown', e => { e.stopPropagation(); });
+            pinBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                vscode.postMessage({ type: 'togglePin', label: f.label });
+            });
+            div.appendChild(pinBtn);
             return div;
         }
         function injectWhiteBackground(svg) {
@@ -607,6 +836,10 @@ function handlePanelMessage(message) {
         case 'copyLabel':
             vscode.env.clipboard.writeText(message.label);
             vscode.window.showInformationMessage('Copied: ' + message.label);
+            break;
+        case 'copyBody':
+            vscode.env.clipboard.writeText(message.body);
+            vscode.window.showInformationMessage('Copied formula source: ' + message.label);
             break;
         case 'gotoLine':
             gotoLine(message.line);

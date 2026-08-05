@@ -22,6 +22,36 @@ class FormulaBrowser {
         this._onRefresh = null;
         /** @type {string[]} 最近使用的公式 label（最多 5 个，最新在前），持久化到 workspaceState */
         this._recentLabels = context.workspaceState.get('latex-helper.recentFormulas', []);
+        /** @type {string[]} 置顶的公式 label，持久化到 workspaceState */
+        this._pinnedLabels = context.workspaceState.get('latex-helper.pinnedFormulas', []);
+        /** @type {boolean} 是否在浏览器中显示 Recently Used 分组，持久化到 workspaceState */
+        this._showRecent = context.workspaceState.get('latex-helper.showRecentFormulas', true);
+    }
+
+    /**
+     * 切换某个公式的置顶状态，并通知 WebView 更新 Pinned 分组。
+     * @param {string} label
+     */
+    _togglePin(label) {
+        if (!label || typeof label !== 'string') return;
+        if (this._pinnedLabels.includes(label)) {
+            this._pinnedLabels = this._pinnedLabels.filter(l => l !== label);
+        } else {
+            this._pinnedLabels = [label, ...this._pinnedLabels];
+        }
+        this.context.workspaceState.update('latex-helper.pinnedFormulas', this._pinnedLabels);
+        this.sendMessage({ type: 'pinnedFormulas', labels: this._pinnedLabels });
+    }
+
+    /**
+     * 设置 Recently Used 分组的显示开关，并通知 WebView。
+     * 使用记录（_recordUsed）不受开关影响，仅控制前端渲染。
+     * @param {boolean} value
+     */
+    _setShowRecent(value) {
+        this._showRecent = value === true;
+        this.context.workspaceState.update('latex-helper.showRecentFormulas', this._showRecent);
+        this.sendMessage({ type: 'showRecentFormulas', value: this._showRecent });
     }
 
     /**
@@ -63,7 +93,8 @@ class FormulaBrowser {
                 if (!readySent && this._pendingFormulas) {
                     this.panel.webview.postMessage({
                         type: 'updateFormulas',
-                        formulas: this._pendingFormulas
+                        formulas: this._pendingFormulas.formulas,
+                        theorems: this._pendingFormulas.theorems
                     });
                 }
                 // 重放缓存的 pending 消息
@@ -71,8 +102,10 @@ class FormulaBrowser {
                     this.panel.webview.postMessage(msg);
                 }
                 this._pendingMessages = [];
-                // 补发最近使用列表
+                // 补发最近使用列表、置顶列表与 Recently Used 开关状态
                 this.panel.webview.postMessage({ type: 'recentFormulas', labels: this._recentLabels });
+                this.panel.webview.postMessage({ type: 'pinnedFormulas', labels: this._pinnedLabels });
+                this.panel.webview.postMessage({ type: 'showRecentFormulas', value: this._showRecent });
                 readySent = true;
             } else if (message.type === 'refreshFormulas') {
                 if (this._onRefresh) {
@@ -80,6 +113,8 @@ class FormulaBrowser {
                 }
             } else if (message.type === 'formulaUsed') {
                 this._recordUsed(message.label);
+            } else if (message.type === 'togglePin') {
+                this._togglePin(message.label);
             } else {
                 handlePanelMessage(message);
             }
@@ -92,15 +127,17 @@ class FormulaBrowser {
     }
 
     /**
-     * 推送公式数据（如果 Tab 已打开）。
+     * 推送公式与定理数据（如果 Tab 已打开）。
      * @param {Array} formulas
+     * @param {Array} [theorems]
      */
-    update(formulas) {
-        this._pendingFormulas = formulas;
+    update(formulas, theorems = []) {
+        this._pendingFormulas = { formulas, theorems };
         if (this.panel) {
             this.panel.webview.postMessage({
                 type: 'updateFormulas',
-                formulas
+                formulas,
+                theorems
             });
         }
     }
