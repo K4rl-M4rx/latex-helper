@@ -725,6 +725,9 @@ function getBrowserHtml(cspSource) {
 
         function makeCollapsible(title, formulas, level, createEl) {
             const makeEl = createEl || (f => createFormulaElement(f, false));
+            // Recently Used 分组始终默认展开（条目少、用于快速访问），
+            // 其余分组跟随 defaultCollapsed（默认折叠）
+            const dflt = level === 'recent' ? false : defaultCollapsed;
             const key = level + ':' + title;
             const div = document.createElement('div');
             div.className = 'section-group';
@@ -732,13 +735,13 @@ function getBrowserHtml(cspSource) {
             const header = document.createElement('div');
             header.className = 'section-header' + (level === 'subsection' ? ' subsection-header' : '');
             if (level === 'subsection') header.style.paddingLeft = '28px';
-            const collapsed = (key in collapsedGroups) ? collapsedGroups[key] : defaultCollapsed;
+            const collapsed = (key in collapsedGroups) ? collapsedGroups[key] : dflt;
             const count = Array.isArray(formulas) ? formulas.length : 0;
             header.innerHTML = arrowHtml(collapsed) +
                 '<span class="section-title">' + escapeHtml(title) + '</span>' +
                 '<span class="section-count">(' + count + ')</span>';
             header.addEventListener('click', () => {
-                const cur = (key in collapsedGroups) ? collapsedGroups[key] : defaultCollapsed;
+                const cur = (key in collapsedGroups) ? collapsedGroups[key] : dflt;
                 collapsedGroups[key] = !cur;
                 const body = header.nextElementSibling;
                 const arrowEl = header.querySelector('.arrow');
