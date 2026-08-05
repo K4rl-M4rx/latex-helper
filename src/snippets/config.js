@@ -39,10 +39,11 @@ function getLiveSnippets() {
 
 /**
  * 返回用于标准补全列表的 snippets（triggerWhenComplete !== true）。
+ * SPECIAL_ACTION 条目不进入补全列表（body 不是可插入文本）。
  * @returns {Array<NormalizedSnippet>}
  */
 function getCompletionSnippets() {
-    return getSnippets().filter(s => !s.triggerWhenComplete);
+    return getSnippets().filter(s => !s.triggerWhenComplete && !s.specialAction);
 }
 
 /**
@@ -55,7 +56,11 @@ function getCompletionSnippets() {
  * @property {boolean} triggerWhenComplete
  * @property {number} priority
  * @property {boolean} noPlaceholders
+ * @property {'BREAK'|'FRACTION'|'SYMPY'|null} specialAction
  */
+
+/** latex-utilities 遗留的特殊动作（body 形如 SPECIAL_ACTION_XXX） */
+const SPECIAL_ACTIONS = ['BREAK', 'FRACTION', 'SYMPY'];
 
 /**
  * 归一化规则（对齐原插件 processSnippets）：
@@ -77,8 +82,12 @@ function normalizeSnippets(raw) {
 
         const body = typeof s.body === 'string' ? s.body : '';
 
-        // 过滤 latex-utilities 的特殊动作（暂不支持，导入时已提示）
-        if (body.startsWith('SPECIAL_ACTION')) continue;
+        // latex-utilities 特殊动作：标记类型，body 原样保留
+        let specialAction = null;
+        const saMatch = /^SPECIAL_ACTION_(\w+)$/.exec(body);
+        if (saMatch && SPECIAL_ACTIONS.includes(saMatch[1])) {
+            specialAction = saMatch[1];
+        }
 
         const prefix = typeof s.prefix === 'string' ? s.prefix : '';
         let prefixRegex;
@@ -118,7 +127,8 @@ function normalizeSnippets(raw) {
             description,
             triggerWhenComplete,
             priority,
-            noPlaceholders
+            noPlaceholders,
+            specialAction
         });
     }
 
