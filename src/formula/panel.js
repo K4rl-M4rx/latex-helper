@@ -406,8 +406,8 @@ function getBrowserHtml(cspSource) {
         // 工具栏 Pinned 过滤按钮：开启后列表只显示置顶公式（会话内状态，不持久化）
         let showPinnedOnly = false;
         const collapsedGroups = {};
-        // 切换分类方式后，所有分组默认收缩；用户手动点击后以其选择为准
-        let defaultCollapsed = false;
+        // 分组默认收缩（含 Tab 首次打开）；用户手动点击后以其选择为准
+        let defaultCollapsed = true;
         // VS Code 树视图同款 chevron（参考 LaTeX Workshop 大纲箭头）：收起朝右，展开旋转 90° 朝下
         const CHEVRON_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
         function arrowHtml(collapsed) {
