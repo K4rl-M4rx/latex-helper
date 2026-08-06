@@ -376,9 +376,8 @@ function getBrowserHtml(cspSource) {
         <button class="view-btn active" data-view="formulas">Formulas</button>
         <button class="view-btn" data-view="theorems">Theorems</button>
         <input type="text" id="search-input" placeholder="Search formulas..." />
-        <button class="mode-btn active" data-mode="both">Both</button>
-        <button class="mode-btn" data-mode="label">Label</button>
-        <button class="mode-btn" data-mode="content">Content</button>
+        <button class="mode-btn active" data-mode="label">Label</button>
+        <button class="mode-btn active" data-mode="content">Content</button>
         <button class="mode-btn" id="pin-filter-btn" title="Show only pinned formulas">📌 Pinned</button>
         <button id="refresh-btn" style="padding:5px 12px;border:none;background:var(--vscode-button-background);color:var(--vscode-button-foreground);cursor:pointer;border-radius:2px;font-size:11px;white-space:nowrap;">Refresh</button>
     </div>
@@ -394,7 +393,8 @@ function getBrowserHtml(cspSource) {
         let currentTheorems = [];
         // 当前视图：formulas | theorems（会话内状态）
         let currentView = 'formulas';
-        let searchMode = 'both';
+        // 搜索范围：Label / Content 可独立开关，两个都亮即 both 效果
+        const searchScope = { label: true, content: true };
         let showUnreferenced = true;
         let groupMode = 'section';
         // 最近使用的公式 label（最多 5 个，最新在前），由扩展端持久化并推送
@@ -420,11 +420,12 @@ function getBrowserHtml(cspSource) {
         const unrefToggle = document.getElementById('unref-toggle');
         const countInfo = document.getElementById('count-info');
 
+        // Label / Content 为独立 toggle：点击切换开关，互不影响
         document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.mode-btn[data-mode]').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                searchMode = btn.dataset.mode;
+                const scope = btn.dataset.mode;
+                searchScope[scope] = !searchScope[scope];
+                btn.classList.toggle('active', searchScope[scope]);
                 filterFormulas();
             });
         });
@@ -761,11 +762,12 @@ function getBrowserHtml(cspSource) {
         }
 
         function matchFormula(f, query) {
-            switch (searchMode) {
-                case 'label': return f.label.toLowerCase().includes(query);
-                case 'content': return stripTex(f.body).toLowerCase().includes(query);
-                default: return f.label.toLowerCase().includes(query) || stripTex(f.body).toLowerCase().includes(query);
-            }
+            let label = searchScope.label;
+            let content = searchScope.content;
+            // 两个都关时按 both 处理，避免"什么都搜不到"的死状态
+            if (!label && !content) { label = true; content = true; }
+            return (label && f.label.toLowerCase().includes(query)) ||
+                   (content && stripTex(f.body).toLowerCase().includes(query));
         }
         function stripTex(body) {
             return body.replace(/\\\\\\w+/g,'').replace(/\\\\begin\\{[^}]*\\}/g,'').replace(/\\\\end\\{[^}]*\\}/g,'').replace(/\\\\label\\{[^}]*\\}/g,'').replace(/[{}&_^$]/g,'').replace(/\\\\[a-zA-Z]+/g,'').replace(/\\s+/g,' ').trim();
