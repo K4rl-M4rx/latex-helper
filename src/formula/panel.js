@@ -624,7 +624,7 @@ function getBrowserHtml(cspSource) {
             });
             div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: t.line }); });
             div.addEventListener('dragstart', e => {
-                // 默认拖拽插入 \ref{label}；Cmd/Ctrl+拖拽插入环境源码
+                // 默认拖拽插入 \\ref{label}；Cmd/Ctrl+拖拽插入环境源码
                 const text = (e.metaKey || e.ctrlKey) ? t.body : '\\\\ref{' + t.label + '}';
                 e.dataTransfer.setData('text/plain', text);
                 e.dataTransfer.effectAllowed = 'copy';
