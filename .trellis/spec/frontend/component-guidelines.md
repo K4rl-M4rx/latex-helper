@@ -75,7 +75,11 @@ Rules:
 
 - **Template-literal escaping**: the webview script lives inside a JS template
   literal, so a literal backslash in webview code needs `\\\\` in source
-  (e.g. inserting `\ref{...}` is written `'\\\\ref{'`). Verify via a node
-  smoke test on `getBrowserHtml()` output when adding TeX strings.
+  (e.g. inserting `\ref{...}` is written `'\\\\ref{'`). This applies to
+  **comments too** — a `// ... \ref{label}` comment once put a raw `\r`
+  (carriage return) into the generated script, breaking its syntax and
+  killing the whole browser view (2026-08 incident). `test/webview.test.js`
+  extracts the generated `<script>` and syntax-checks it; run it after any
+  edit to the HTML generators.
 - Forgetting `stopPropagation()` on inner buttons (pin) — the card's own
   click handler would also fire (copies the label).
