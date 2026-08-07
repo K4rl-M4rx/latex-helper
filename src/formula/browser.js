@@ -28,6 +28,8 @@ class FormulaBrowser {
         this._pinnedLabels = context.workspaceState.get('latex-helper.pinnedFormulas', []);
         /** @type {boolean} 是否在浏览器中显示 Recently Used 分组，持久化到 workspaceState */
         this._showRecent = context.workspaceState.get('latex-helper.showRecentFormulas', true);
+        /** @type {string | null} 用户显式选择过的分类方式；null = 使用 webview 默认（公式 section / 定理 type） */
+        this._groupMode = null;
     }
 
     /**
@@ -108,6 +110,10 @@ class FormulaBrowser {
                 this.panel.webview.postMessage({ type: 'recentFormulas', labels: this._recentLabels });
                 this.panel.webview.postMessage({ type: 'pinnedFormulas', labels: this._pinnedLabels });
                 this.panel.webview.postMessage({ type: 'showRecentFormulas', value: this._showRecent });
+                // 补发用户显式选择过的分类方式（未选择过则保持 webview 默认：公式 section / 定理 type）
+                if (this._groupMode) {
+                    this.panel.webview.postMessage({ type: 'groupMode', value: this._groupMode });
+                }
                 readySent = true;
             } else if (message.type === 'refreshFormulas') {
                 if (this._onRefresh) {
@@ -165,6 +171,10 @@ class FormulaBrowser {
      * @param {*} message
      */
     sendMessage(message) {
+        // 缓存显式选择的分类方式，供 Tab 重开 ready 时补发
+        if (message && message.type === 'groupMode') {
+            this._groupMode = message.value;
+        }
         if (this.panel) {
             this.panel.webview.postMessage(message);
         } else {

@@ -367,7 +367,9 @@ async function refreshFormulas(document) {
         currentTheorems = parsed.theorems;
         currentFormulas = formulas;
         formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Done' });
-        formulaBrowser.sendMessage({ type: 'groupMode', value: groupMode });
+        // 注意：不要在此重发 groupMode。刷新会重建 webview 状态前的默认值
+        // （公式 section / 定理 type），重发会把定理默认冲成 section；
+        // 用户显式切换时 setGroupMode 命令已单独 sendMessage（关闭时排队、ready 重放）。
     } catch (err) {
         console.error('LaTeX Helper: formula refresh failed', err);
         vscode.window.showErrorMessage(`LaTeX Helper: ${err.message}`);

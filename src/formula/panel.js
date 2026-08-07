@@ -411,7 +411,9 @@ function getBrowserHtml(cspSource) {
         // 搜索范围：Label / Content 可独立开关，两个都亮即 both 效果
         const searchScope = { label: true, content: true };
         let showUnreferenced = true;
-        let groupMode = 'section';
+        // 分类方式：公式默认按 section，定理默认按环境类型（theorem/lemma/... 各自归组）
+        let formulaGroupMode = 'section';
+        let theoremGroupMode = 'type';
         // 最近使用的公式 label（最多 5 个，最新在前），由扩展端持久化并推送
         let recentLabels = [];
         // 置顶的公式 label，由扩展端持久化并推送
@@ -545,11 +547,14 @@ function getBrowserHtml(cspSource) {
                     }
                     break;
                 case 'groupMode': {
-                    const newGroupMode = msg.value === 'subsection' ? 'subsection' : 'section';
-                    if (newGroupMode !== groupMode) {
-                        groupMode = newGroupMode;
+                    const validModes = ['section', 'subsection', 'type'];
+                    const newGroupMode = validModes.includes(msg.value) ? msg.value : 'section';
+                    // Group By 选择对公式和定理两个视图统一生效
+                    if (newGroupMode !== formulaGroupMode || newGroupMode !== theoremGroupMode) {
+                        formulaGroupMode = newGroupMode;
+                        theoremGroupMode = newGroupMode;
                         // 仅在分类方式真正变化时重置：全部分组默认收缩
-                        // （每次刷新后 extension 会重发相同值，不能因此清掉用户手动的展开/收缩）
+                        // （不能因重发相同值清掉用户手动的展开/收缩）
                         for (const k of Object.keys(collapsedGroups)) delete collapsedGroups[k];
                         defaultCollapsed = true;
                     }
@@ -577,7 +582,7 @@ function getBrowserHtml(cspSource) {
             emptyState.style.display = 'none';
             const refCount = currentFormulas.filter(f => f.referenced).length;
             const unrefCount = currentFormulas.length - refCount;
-            countInfo.textContent = currentFormulas.length + ' formulas (' + refCount + ' referenced, ' + unrefCount + ' unreferenced) | group: ' + groupMode;
+            countInfo.textContent = currentFormulas.length + ' formulas (' + refCount + ' referenced, ' + unrefCount + ' unreferenced) | group: ' + formulaGroupMode;
             countInfo.style.display = 'block';
             if (unrefCount > 0) {
                 unrefToggle.style.display = 'block';
@@ -595,10 +600,12 @@ function getBrowserHtml(cspSource) {
                 return;
             }
             if (showRecent) appendRecentGroup(query);
-            if (groupMode === 'subsection') {
-                groupBySubsection(query);
+            if (formulaGroupMode === 'subsection') {
+                groupTwoLevel(currentFormulas, query, matchFormula, null, !showUnreferenced, 'formulas');
+            } else if (formulaGroupMode === 'type') {
+                groupSingleLevel(currentFormulas, query, matchFormula, f => f.envType || 'other', null, !showUnreferenced, 'formulas');
             } else {
-                groupBySectionOnly(query);
+                groupSingleLevel(currentFormulas, query, matchFormula, f => f.section || 'Uncategorized', null, !showUnreferenced, 'formulas');
             }
         }
 
@@ -635,22 +642,18 @@ function getBrowserHtml(cspSource) {
             }
             emptyState.style.display = 'none';
             const query = searchInput.value.toLowerCase().trim();
-            const map = {};
-            const order = [];
-            currentTheorems.forEach(t => {
-                if (query !== '' && !matchTheorem(t, query)) return;
-                const key = t.envType || 'other';
-                if (!map[key]) { map[key] = []; order.push(key); }
-                map[key].push(t);
-            });
-            countInfo.textContent = currentTheorems.length + ' theorem environments';
+            countInfo.textContent = currentTheorems.length + ' theorem environments | group: ' + theoremGroupMode;
             countInfo.style.display = 'block';
             formulaList.innerHTML = '';
             theoremBodyEls = {}; // DOM 重建，旧的 body 引用全部失效
-            if (order.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching theorems</div>'; return; }
-            order.forEach(env => {
-                formulaList.appendChild(makeCollapsible(env, map[env], 'section', createTheoremElement));
-            });
+            if (theoremGroupMode === 'subsection') {
+                groupTwoLevel(currentTheorems, query, matchTheorem, createTheoremElement, false, 'theorems');
+            } else if (theoremGroupMode === 'section') {
+                groupSingleLevel(currentTheorems, query, matchTheorem, t => t.section || 'Uncategorized', createTheoremElement, false, 'theorems');
+            } else {
+                // 默认按定理类型分组：theorem 归 theorem、lemma 归 lemma
+                groupSingleLevel(currentTheorems, query, matchTheorem, t => t.envType || 'other', createTheoremElement, false, 'theorems');
+            }
         }
 
         function matchTheorem(t, query) {
@@ -753,28 +756,30 @@ function getBrowserHtml(cspSource) {
             formulaList.appendChild(makeCollapsible('Recently Used', items, 'recent'));
         }
 
-        function groupBySectionOnly(query) {
-            const order = buildGroupMap(query, f => f.section || 'Uncategorized');
-            if (order.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching formulas</div>'; return; }
-            order.forEach(([title, formulas]) => {
-                formulaList.appendChild(makeCollapsible(title, formulas, 'section'));
+        // 单级分组：按 keyFn 提取的键（section / envType 等）分组，公式与定理视图共用
+        function groupSingleLevel(items, query, matchFn, keyFn, createEl, hideUnreferenced, noun) {
+            const order = buildGroupMap(items, query, matchFn, keyFn, hideUnreferenced);
+            if (order.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching ' + noun + '</div>'; return; }
+            order.forEach(([title, groupItems]) => {
+                formulaList.appendChild(makeCollapsible(title, groupItems, 'section', createEl));
             });
         }
 
-        function groupBySubsection(query) {
-            // 两级：section → subsection
+        // 两级分组：section → subsection，公式与定理视图共用
+        function groupTwoLevel(items, query, matchFn, createEl, hideUnreferenced, noun) {
+            const makeEl = createEl || (f => createFormulaElement(f, false));
             const secMap = {};
             const secOrder = [];
-            currentFormulas.forEach(f => {
-                if (!f.referenced && !showUnreferenced) return;
-                if (query !== '' && !matchFormula(f, query)) return;
+            items.forEach(f => {
+                if (hideUnreferenced && !f.referenced) return;
+                if (query !== '' && !matchFn(f, query)) return;
                 const sec = f.section || 'Uncategorized';
                 const sub = f.subsection || '';
                 if (!secMap[sec]) { secMap[sec] = {}; secOrder.push(sec); }
                 if (!secMap[sec][sub]) secMap[sec][sub] = [];
                 secMap[sec][sub].push(f);
             });
-            if (secOrder.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching formulas</div>'; return; }
+            if (secOrder.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching ' + noun + '</div>'; return; }
 
             secOrder.forEach(sec => {
                 const subMap = secMap[sec];
@@ -807,9 +812,9 @@ function getBrowserHtml(cspSource) {
 
                 subKeys.forEach(sub => {
                     if (sub === '') {
-                        subMap[sub].forEach(f => { secBody.appendChild(createFormulaElement(f, false)); });
+                        subMap[sub].forEach(f => { secBody.appendChild(makeEl(f)); });
                     } else {
-                        secBody.appendChild(makeCollapsible(sub, subMap[sub], 'subsection'));
+                        secBody.appendChild(makeCollapsible(sub, subMap[sub], 'subsection', createEl));
                     }
                 });
                 secDiv.appendChild(secBody);
@@ -817,12 +822,12 @@ function getBrowserHtml(cspSource) {
             });
         }
 
-        function buildGroupMap(query, keyFn) {
+        function buildGroupMap(items, query, matchFn, keyFn, hideUnreferenced) {
             const map = {};
             const order = [];
-            currentFormulas.forEach(f => {
-                if (!f.referenced && !showUnreferenced) return;
-                if (query !== '' && !matchFormula(f, query)) return;
+            items.forEach(f => {
+                if (hideUnreferenced && !f.referenced) return;
+                if (query !== '' && !matchFn(f, query)) return;
                 const key = keyFn(f);
                 if (!map[key]) { map[key] = []; order.push(key); }
                 map[key].push(f);

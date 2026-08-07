@@ -8,7 +8,8 @@ const vscode = require('vscode');
 
 const GROUP_MODES = [
     { id: 'section', label: 'Section' },
-    { id: 'subsection', label: 'Subsection' }
+    { id: 'subsection', label: 'Subsection' },
+    { id: 'type', label: 'Type' }
 ];
 
 class GroupModeTreeProvider {
