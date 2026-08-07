@@ -438,12 +438,19 @@ function getBrowserHtml(cspSource) {
         updateStickyOffset();
         window.addEventListener('resize', updateStickyOffset);
 
-        // Label / Content 为独立 toggle：点击切换开关，互不影响
+        // Label / Content 为独立 toggle；不允许两个都灭——点灭一个时若另一个
+        // 已是灭的，则改为点亮另一个（等效切换）
         document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const scope = btn.dataset.mode;
+                const other = scope === 'label' ? 'content' : 'label';
                 searchScope[scope] = !searchScope[scope];
-                btn.classList.toggle('active', searchScope[scope]);
+                if (!searchScope[scope] && !searchScope[other]) {
+                    searchScope[other] = true;
+                }
+                document.querySelectorAll('.mode-btn[data-mode]').forEach(b => {
+                    b.classList.toggle('active', searchScope[b.dataset.mode]);
+                });
                 filterFormulas();
             });
         });
@@ -780,12 +787,9 @@ function getBrowserHtml(cspSource) {
         }
 
         function matchFormula(f, query) {
-            let label = searchScope.label;
-            let content = searchScope.content;
-            // 两个都关时按 both 处理，避免"什么都搜不到"的死状态
-            if (!label && !content) { label = true; content = true; }
-            return (label && f.label.toLowerCase().includes(query)) ||
-                   (content && stripTex(f.body).toLowerCase().includes(query));
+            // searchScope 至少有一个为 true（UI 层保证两个不会同时灭）
+            return (searchScope.label && f.label.toLowerCase().includes(query)) ||
+                   (searchScope.content && stripTex(f.body).toLowerCase().includes(query));
         }
         function stripTex(body) {
             return body.replace(/\\\\\\w+/g,'').replace(/\\\\begin\\{[^}]*\\}/g,'').replace(/\\\\end\\{[^}]*\\}/g,'').replace(/\\\\label\\{[^}]*\\}/g,'').replace(/[{}&_^$]/g,'').replace(/\\\\[a-zA-Z]+/g,'').replace(/\\s+/g,' ').trim();
