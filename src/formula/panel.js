@@ -225,12 +225,13 @@ function getBrowserHtml(cspSource) {
         .search-bar {
             display: flex;
             gap: 4px;
-            margin-bottom: 12px;
+            /* 下间距全部折进 padding，保证 offsetHeight 即完整占位高度（sticky 偏移量依赖它） */
+            margin-bottom: 0;
+            padding-bottom: 20px;
             position: sticky;
             top: 0;
             background: var(--vscode-editor-background);
             z-index: 10;
-            padding-bottom: 8px;
             border-bottom: 1px solid var(--vscode-panel-border);
         }
         .search-bar input {
@@ -352,6 +353,13 @@ function getBrowserHtml(cspSource) {
             user-select: none;
         }
         .section-header:hover { background: var(--vscode-list-hoverBackground); }
+        /* section 级分组头滚动时吸附在搜索栏下方（--searchbar-h 由脚本按实际高度设置），
+           subsection 头不吸附（避免多级堆叠错位） */
+        .section-header:not(.subsection-header) {
+            position: sticky;
+            top: var(--searchbar-h, 46px);
+            z-index: 5;
+        }
         .section-header .arrow, .unref-toggle .arrow {
             display: inline-flex;
             align-items: center;
@@ -419,6 +427,16 @@ function getBrowserHtml(cspSource) {
         const emptyState = document.getElementById('empty-state');
         const unrefToggle = document.getElementById('unref-toggle');
         const countInfo = document.getElementById('count-info');
+
+        // 分组头 sticky 偏移 = 搜索栏实际高度（含下 padding），随窗口尺寸变化重算
+        function updateStickyOffset() {
+            document.documentElement.style.setProperty(
+                '--searchbar-h',
+                document.querySelector('.search-bar').offsetHeight + 'px'
+            );
+        }
+        updateStickyOffset();
+        window.addEventListener('resize', updateStickyOffset);
 
         // Label / Content 为独立 toggle：点击切换开关，互不影响
         document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
