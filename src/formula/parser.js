@@ -86,6 +86,7 @@ function parseDocument(text) {
             theorems.push({
                 label,
                 body: env.body,
+                bodyHash: computeHash(env.body),
                 envType: env.env,
                 note,
                 preview,

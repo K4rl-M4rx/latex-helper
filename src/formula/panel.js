@@ -289,6 +289,13 @@ function getBrowserHtml(cspSource) {
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
+        .thm-body { margin-top: 6px; }
+        .thm-loading {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            padding: 10px;
+            text-align: center;
+        }
         .formula-list { display: flex; flex-direction: column; gap: 10px; }
         .formula-item {
             position: relative;
@@ -360,7 +367,7 @@ function getBrowserHtml(cspSource) {
             top: var(--searchbar-h, 46px);
             z-index: 5;
         }
-        .section-header .arrow, .unref-toggle .arrow {
+        .section-header .arrow, .unref-toggle .arrow, .thm-head .arrow {
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -369,8 +376,8 @@ function getBrowserHtml(cspSource) {
             color: var(--vscode-icon-foreground, var(--vscode-foreground));
             transition: transform 0.12s ease-in-out;
         }
-        .section-header .arrow svg, .unref-toggle .arrow svg { width: 16px; height: 16px; display: block; }
-        .section-header .arrow.expanded, .unref-toggle .arrow.expanded { transform: rotate(90deg); }
+        .section-header .arrow svg, .unref-toggle .arrow svg, .thm-head .arrow svg { width: 16px; height: 16px; display: block; }
+        .section-header .arrow.expanded, .unref-toggle .arrow.expanded, .thm-head .arrow.expanded { transform: rotate(90deg); }
         .section-header .section-title { flex: 1; }
         .section-header.subsection-header { font-weight: 400; font-size: 11px; background: transparent; border: none; }
         .section-header .section-count { font-weight: normal; color: var(--vscode-descriptionForeground); font-size: 11px; }
@@ -413,6 +420,11 @@ function getBrowserHtml(cspSource) {
         let showRecent = true;
         // 工具栏 Pinned 过滤按钮：开启后列表只显示置顶公式（会话内状态，不持久化）
         let showPinnedOnly = false;
+        // 定理展开预览状态：展开标记 / SVG 缓存 / 编译中标记 / body DOM 引用（label 键）
+        const expandedTheorems = {};
+        const theoremSvgs = {};
+        const theoremPending = {};
+        let theoremBodyEls = {};
         const collapsedGroups = {};
         // 分组默认收缩（含 Tab 首次打开）；用户手动点击后以其选择为准
         let defaultCollapsed = true;
@@ -482,6 +494,10 @@ function getBrowserHtml(cspSource) {
                 case 'updateFormulas':
                     currentFormulas = msg.formulas || [];
                     currentTheorems = msg.theorems || [];
+                    // 文档刷新后定理内容可能变化：清空预览缓存与展开状态
+                    for (const k of Object.keys(expandedTheorems)) delete expandedTheorems[k];
+                    for (const k of Object.keys(theoremSvgs)) delete theoremSvgs[k];
+                    for (const k of Object.keys(theoremPending)) delete theoremPending[k];
                     render();
                     break;
                 case 'recentFormulas':
@@ -496,6 +512,20 @@ function getBrowserHtml(cspSource) {
                     showRecent = msg.value !== false;
                     render();
                     break;
+                case 'theoremSvg': {
+                    // 定理懒编译结果到达：缓存并按需填入展开的卡片
+                    theoremPending[msg.label] = false;
+                    const bodyEl = theoremBodyEls[msg.label];
+                    if (msg.svg) {
+                        theoremSvgs[msg.label] = msg.svg;
+                        if (bodyEl && expandedTheorems[msg.label]) {
+                            bodyEl.innerHTML = '<div class="svg-wrap">' + injectWhiteBackground(msg.svg) + '</div>';
+                        }
+                    } else if (bodyEl && expandedTheorems[msg.label]) {
+                        bodyEl.innerHTML = '<div class="thm-loading" style="color:var(--vscode-errorForeground);">Preview failed: ' + escapeHtml(msg.error || 'compile error') + '</div>';
+                    }
+                    break;
+                }
                 case 'clear':
                     currentFormulas = [];
                     currentTheorems = [];
@@ -616,6 +646,7 @@ function getBrowserHtml(cspSource) {
             countInfo.textContent = currentTheorems.length + ' theorem environments';
             countInfo.style.display = 'block';
             formulaList.innerHTML = '';
+            theoremBodyEls = {}; // DOM 重建，旧的 body 引用全部失效
             if (order.length === 0) { formulaList.innerHTML = '<div class="empty-state">No matching theorems</div>'; return; }
             order.forEach(env => {
                 formulaList.appendChild(makeCollapsible(env, map[env], 'section', createTheoremElement));
@@ -633,22 +664,50 @@ function getBrowserHtml(cspSource) {
             const div = document.createElement('div');
             div.className = 'formula-item' + (t.referenced ? '' : ' unreferenced');
             div.draggable = true;
-            div.title = 'Click: copy label | Cmd/Ctrl+click: copy source | drag: insert \\\\ref | Cmd/Ctrl+drag: insert source';
-            let html = '<div class="thm-head"><span class="thm-env">' + escapeHtml(t.envType) + '</span><span class="label">' + escapeHtml(t.label) + '</span></div>';
+            div.title = 'Click: expand preview | Cmd/Ctrl+click: copy label | drag: insert \\\\ref | Cmd/Ctrl+drag: insert source | double-click: goto source';
+            const isExpanded = expandedTheorems[t.label] === true;
+            let html = '<div class="thm-head">' + arrowHtml(!isExpanded) + '<span class="thm-env">' + escapeHtml(t.envType) + '</span><span class="label">' + escapeHtml(t.label) + '</span></div>';
             if (t.note) html += '<div class="thm-note">[' + escapeHtml(t.note) + ']</div>';
             if (t.preview) html += '<div class="thm-preview">' + escapeHtml(t.preview) + '</div>';
             const sectionInfo = (t.section ? '§' + t.section : '') + (t.subsection ? ' › ' + t.subsection : '');
             html += '<div class="formula-meta"><span class="line">L' + t.line + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
             div.innerHTML = html;
+
+            // 展开区：懒编译的定理完整内容（PDF 剪切效果）
+            const bodyEl = document.createElement('div');
+            bodyEl.className = 'thm-body';
+            bodyEl.style.display = 'none';
+            div.appendChild(bodyEl);
+            theoremBodyEls[t.label] = bodyEl;
+            const arrowEl = div.querySelector('.thm-head .arrow');
+            if (isExpanded) {
+                // 重渲染后恢复展开状态与已缓存内容
+                bodyEl.style.display = '';
+                if (theoremSvgs[t.label]) {
+                    bodyEl.innerHTML = '<div class="svg-wrap">' + injectWhiteBackground(theoremSvgs[t.label]) + '</div>';
+                } else {
+                    requestTheoremPreview(t, bodyEl);
+                }
+            }
+
+            // 单击展开/收起；250ms 延迟以区分双击跳转
+            let clickTimer = null;
             div.addEventListener('click', (e) => {
                 if (e.metaKey || e.ctrlKey) {
-                    // 修饰键 + 单击：复制环境源码
-                    vscode.postMessage({ type: 'copyBody', label: t.label, body: t.body });
-                } else {
+                    // 修饰键 + 单击：复制 label
                     vscode.postMessage({ type: 'copyLabel', label: t.label });
+                    return;
                 }
+                if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+                clickTimer = setTimeout(() => {
+                    clickTimer = null;
+                    toggleTheoremExpand(t, bodyEl, arrowEl);
+                }, 250);
             });
-            div.addEventListener('dblclick', () => { vscode.postMessage({ type: 'gotoLine', line: t.line }); });
+            div.addEventListener('dblclick', () => {
+                if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+                vscode.postMessage({ type: 'gotoLine', line: t.line });
+            });
             div.addEventListener('dragstart', e => {
                 // 默认拖拽插入 \\ref{label}；Cmd/Ctrl+拖拽插入环境源码
                 const text = (e.metaKey || e.ctrlKey) ? t.body : '\\\\ref{' + t.label + '}';
@@ -656,6 +715,28 @@ function getBrowserHtml(cspSource) {
                 e.dataTransfer.effectAllowed = 'copy';
             });
             return div;
+        }
+
+        // 请求定理预览编译（带去重：编译中不重复发）
+        function requestTheoremPreview(t, bodyEl) {
+            if (theoremSvgs[t.label] || theoremPending[t.label]) return;
+            theoremPending[t.label] = true;
+            bodyEl.innerHTML = '<div class="thm-loading">Compiling preview...</div>';
+            vscode.postMessage({ type: 'compileTheorem', label: t.label });
+        }
+
+        function toggleTheoremExpand(t, bodyEl, arrowEl) {
+            const willExpand = expandedTheorems[t.label] !== true;
+            expandedTheorems[t.label] = willExpand;
+            bodyEl.style.display = willExpand ? '' : 'none';
+            if (arrowEl) arrowEl.classList.toggle('expanded', willExpand);
+            if (willExpand) {
+                if (theoremSvgs[t.label]) {
+                    bodyEl.innerHTML = '<div class="svg-wrap">' + injectWhiteBackground(theoremSvgs[t.label]) + '</div>';
+                } else {
+                    requestTheoremPreview(t, bodyEl);
+                }
+            }
         }
 
         // 最近使用分组：固定在列表顶部，公式仍同时保留在原有分类中

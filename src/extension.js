@@ -27,6 +27,12 @@ let currentPreambleHash = null;
 /** @type {Array} */
 let currentFormulas = []; // eslint-disable-line no-unused-vars
 
+/** @type {string} 当前文档 preamble（定理预览懒编译用） */
+let currentPreamble = '';
+
+/** @type {Array} 当前文档的定理类环境条目（定理预览懒编译用） */
+let currentTheorems = [];
+
 /** @type {boolean} */
 let onlyRef = true;
 
@@ -102,6 +108,21 @@ function activate(context) {
         } else {
             formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'No document' });
             vscode.window.showWarningMessage('LaTeX Helper: no active LaTeX document to refresh');
+        }
+    };
+    // 定理卡片展开时的懒编译：复用公式编译管道，单条环境 → SVG
+    // 已知限制：预览中定理编号从 1 起排，与原文档编号不一致（standalone 独立编译）
+    formulaBrowser._onCompileTheorem = async (label) => {
+        const thm = currentTheorems.find(t => t.label === label);
+        if (!thm || !currentPreamble) {
+            formulaBrowser.sendMessage({ type: 'theoremSvg', label, svg: '', error: 'theorem not found (document not parsed yet)' });
+            return;
+        }
+        try {
+            const compiled = await compileFormulas(currentPreamble, [{ label: thm.label, body: thm.body }]);
+            formulaBrowser.sendMessage({ type: 'theoremSvg', label, svg: compiled[0]?.svg || '' });
+        } catch (err) {
+            formulaBrowser.sendMessage({ type: 'theoremSvg', label, svg: '', error: err.message });
         }
     };
 
@@ -342,6 +363,8 @@ async function refreshFormulas(document) {
         }
 
         currentPreambleHash = parsed.preambleHash;
+        currentPreamble = parsed.preamble;
+        currentTheorems = parsed.theorems;
         currentFormulas = formulas;
         formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Done' });
         formulaBrowser.sendMessage({ type: 'groupMode', value: groupMode });

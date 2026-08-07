@@ -20,6 +20,8 @@ class FormulaBrowser {
         this._pendingMessages = [];
         /** @type {(() => void) | null} */
         this._onRefresh = null;
+        /** @type {((label: string) => void) | null} 定理预览懒编译请求（extension.js 接线） */
+        this._onCompileTheorem = null;
         /** @type {string[]} 最近使用的公式 label（最多 5 个，最新在前），持久化到 workspaceState */
         this._recentLabels = context.workspaceState.get('latex-helper.recentFormulas', []);
         /** @type {string[]} 置顶的公式 label，持久化到 workspaceState */
@@ -115,6 +117,10 @@ class FormulaBrowser {
                 this._recordUsed(message.label);
             } else if (message.type === 'togglePin') {
                 this._togglePin(message.label);
+            } else if (message.type === 'compileTheorem') {
+                if (this._onCompileTheorem) {
+                    this._onCompileTheorem(message.label);
+                }
             } else {
                 handlePanelMessage(message);
             }
