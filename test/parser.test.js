@@ -56,6 +56,12 @@ const tex = [
     '\\begin{align*}\\label{eq:star}',
     'c=d',
     '\\end{align*}',
+    '\\begin{lemma}\\label{lem:inner}',
+    'Inner text.',
+    '\\begin{equation}\\label{eq:inner}',
+    'x=y',
+    '\\end{equation}',
+    '\\end{lemma}',
     '\\end{document}'
 ].join('\n');
 
@@ -67,7 +73,7 @@ console.log('== 定理类环境解析 ==');
 
 check('内置环境被收录', 'thm:fund' in thmByLabel, true);
 check('\\newtheorem 自定义环境被收录', 'prop:x' in thmByLabel, true);
-check('无 label 环境被跳过', parsed.theorems.some(t => t.envType === 'lemma'), false);
+check('无 label 环境被跳过（lemma 仅剩 lem:inner 一条）', parsed.theorems.filter(t => t.envType === 'lemma').length, 1);
 check('optional argument 提取', thmByLabel['thm:fund'].note, 'Fundamental');
 check('被 \\ref 引用', thmByLabel['thm:fund'].referenced, true);
 check('未被引用', thmByLabel['prop:x'].referenced, false);
@@ -76,6 +82,9 @@ check('所属 subsection', thmByLabel['thm:fund'].subsection, 'Setup');
 check('预览去掉命令与括号', thmByLabel['thm:fund'].preview, 'Every x0 is a bar.');
 check('环境类型记录', thmByLabel['prop:x'].envType, 'prop');
 check('定理条目带 body（Cmd+拖拽用）', thmByLabel['prop:x'].body.includes('\\end{prop}'), true);
+check('含内嵌公式时只收录定理自身 label', 'lem:inner' in thmByLabel, true);
+check('内嵌公式的 label 不生成冗余定理卡片', 'eq:inner' in thmByLabel, false);
+check('内嵌公式仍正常收录为公式卡片', 'eq:inner' in formulasByLabel, true);
 
 console.log('== 公式环境解析（回归 + starred 修复）==');
 

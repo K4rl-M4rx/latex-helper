@@ -75,7 +75,9 @@ function parseDocument(text) {
     const theorems = [];
 
     for (const env of theoremEnvs) {
-        const labels = extractLabels(env.body);
+        // 只取定理自身的 \label：剥掉内层环境块（如 lemma 里的 equation），
+        // 否则每个内部公式的 label 都会冗余生成一张定理卡片
+        const labels = extractLabels(stripInnerEnvironments(env.body));
         if (labels.length === 0) continue; // 只收录带 label 的环境
 
         const { section, subsection } = locateSection(sections, env.startLine);
@@ -130,6 +132,24 @@ function locateSection(sections, envLine) {
 function extractEnvNote(body) {
     const match = /^\\begin\{[^}]+\}\[([^\]]*)\]/.exec(body);
     return match ? match[1].trim() : '';
+}
+
+/**
+ * 剥掉环境 body 中的内层环境块（先去掉最外层 \begin/\end 包装，再反复剥内层），
+ * 用于只提取环境自身的 \label —— 内层环境（如定理里的 equation）的 label 不属于宿主环境。
+ * @param {string} body
+ * @returns {string}
+ */
+function stripInnerEnvironments(body) {
+    let inner = body
+        .replace(/^\\begin\{[^}]+\}(\[[^\]]*\])?/, '')
+        .replace(/\\end\{[^}]+\}\s*$/, '');
+    // 非贪婪匹配每次剥掉一对最内层 \begin...\end，循环直到没有环境块
+    const re = /\\begin\{[^}]+\}(\[[^\]]*\])?[\s\S]*?\\end\{[^}]+\}/;
+    while (re.test(inner)) {
+        inner = inner.replace(re, '');
+    }
+    return inner;
 }
 
 /**
