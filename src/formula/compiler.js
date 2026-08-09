@@ -80,9 +80,10 @@ function buildStandaloneDoc(preamble, formulas) {
  * 在临时目录中运行 latex（DVI 模式）。
  * @param {string} texContent
  * @param {string} workDir
+ * @param {number} [pageCount] 页数（环境条数），超时随页数放大
  * @returns {Promise<string>} DVI 文件路径
  */
-function runLatex(texContent, workDir) {
+function runLatex(texContent, workDir, pageCount = 1) {
     return new Promise((resolve, reject) => {
         const config = vscode.workspace.getConfiguration('latex-helper');
         const latexPath = config.get('latexPath', 'latex');
@@ -101,10 +102,12 @@ function runLatex(texContent, workDir) {
         let stdout = '';
         let stderr = '';
 
+        // 单页 30s 起步，批量编译（尤其定理）页数多时按比例放宽
+        const timeoutMs = Math.max(30000, pageCount * 3000);
         const timer = setTimeout(() => {
             proc.kill();
-            reject(new Error('latex compilation timed out (30s)'));
-        }, 30000);
+            reject(new Error(`latex compilation timed out (${timeoutMs / 1000}s, ${pageCount} pages)`));
+        }, timeoutMs);
 
         proc.stdout.on('data', (data) => { stdout += data.toString(); });
         proc.stderr.on('data', (data) => { stderr += data.toString(); });
@@ -238,7 +241,7 @@ async function compileFormulas(preamble, formulas) {
     const workDir = fs.mkdtempSync(path.join(getTempBaseDir(), 'latex-helper-'));
     try {
         const texContent = buildStandaloneDoc(preamble, formulas);
-        const dviPath = await runLatex(texContent, workDir);
+        const dviPath = await runLatex(texContent, workDir, formulas.length);
         const svgs = await convertToSVG(dviPath, workDir, formulas.length);
 
         return formulas.map((f, i) => ({

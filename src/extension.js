@@ -302,10 +302,12 @@ function requestRefresh(document) {
 /**
  * 批量编译定理预览 SVG：按 bodyHash 去重并复用公式的增量缓存目录，新结果写回缓存。
  * 折叠的定理卡片用该 SVG 裁剪出一行编译预览，点击展开显示完整内容。
+ * 分批编译（每批 8 条）：latex -halt-on-error 下一条坏定理只拖垮本批，
+ * 不影响其他批次；失败的定理没有一行预览，展开时仍可单条懒编译。
  * @param {string} preamble
  * @param {Array<{label: string, body: string, bodyHash: string}>} theorems
  * @param {boolean} preambleChanged
- * @returns {Promise<Array<{label: string, svg: string}>>}
+ * @returns {Promise<{svgs: Array<{label: string, svg: string}>, cached: number, compiled: number, failed: number}>}
  */
 async function compileTheoremPreviews(preamble, theorems, preambleChanged) {
     // 按 bodyHash 去重：内容相同的定理只编译一次
@@ -321,18 +323,37 @@ async function compileTheoremPreviews(preamble, theorems, preambleChanged) {
         svgByHash.set(t.bodyHash, svg);
         if (!svg) toCompile.push({ label: t.bodyHash, body: t.body });
     }
-    if (toCompile.length > 0) {
-        const compiled = await compileFormulas(preamble, toCompile);
-        for (let i = 0; i < toCompile.length; i++) {
-            const hash = toCompile[i].label;
-            const svg = compiled[i] ? compiled[i].svg : '';
-            svgByHash.set(hash, svg);
-            if (svg) {
-                try { fs.writeFileSync(path.join(cacheDir, hash + '.svg'), svg, 'utf-8'); } catch { /* 缓存写失败不影响显示 */ }
+    const cached = svgByHash.size - toCompile.length;
+    let compiled = 0;
+    let failed = 0;
+    const CHUNK = 8;
+    for (let i = 0; i < toCompile.length; i += CHUNK) {
+        const chunk = toCompile.slice(i, i + CHUNK);
+        try {
+            const results = await compileFormulas(preamble, chunk);
+            for (let j = 0; j < chunk.length; j++) {
+                const hash = chunk[j].label;
+                const svg = results[j] ? results[j].svg : '';
+                svgByHash.set(hash, svg);
+                if (svg) {
+                    compiled++;
+                    try { fs.writeFileSync(path.join(cacheDir, hash + '.svg'), svg, 'utf-8'); } catch { /* 缓存写失败不影响显示 */ }
+                } else {
+                    failed++;
+                }
             }
+        } catch (err) {
+            // 本批整体失败（超时或坏定理）：其余批次不受影响
+            failed += chunk.length;
+            console.error(`LaTeX Helper: theorem preview chunk ${i / CHUNK + 1} compile failed`, err);
         }
     }
-    return theorems.map(t => ({ label: t.label, svg: svgByHash.get(t.bodyHash) || '' }));
+    return {
+        svgs: theorems.map(t => ({ label: t.label, svg: svgByHash.get(t.bodyHash) || '' })),
+        cached,
+        compiled,
+        failed
+    };
 }
 
 /**
@@ -340,7 +361,7 @@ async function compileTheoremPreviews(preamble, theorems, preambleChanged) {
  * @param {vscode.TextDocument} document
  */
 async function refreshFormulas(document) {
-    formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: true, message: 'Compiling...' });
+    formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: true, message: 'Refreshing...' });
     try {
         // 防御：已关闭文档的 getText() 是旧快照，从磁盘重开
         if (document.isClosed) {
@@ -355,6 +376,9 @@ async function refreshFormulas(document) {
             ? parsed.formulas.filter(f => f.referenced)
             : parsed.formulas;
         const preambleChanged = parsed.preambleHash !== currentPreambleHash;
+        // 缓存命中/新编译统计，显示在刷新完成的状态消息里（缓存是否生效一眼可见）
+        let formulaCached = 0;
+        let formulaCompiled = 0;
 
         if (formulas.length > 0) {
             // 去重
@@ -393,6 +417,8 @@ async function refreshFormulas(document) {
                     svgResults[pendingIndices[j]] = compiled[j]?.svg || '';
                 }
             }
+            formulaCached = uniqueFormulas.length - toCompile.length;
+            formulaCompiled = toCompile.length;
 
             // 写入缓存
             const cacheResults = formulas.map(f => ({
@@ -422,11 +448,14 @@ async function refreshFormulas(document) {
         }
 
         // 定理预览批量编译：与公式共用 bodyHash 增量缓存。
-        // 批量失败不阻塞刷新：一行预览缺失，展开时仍可单条懒编译兜底。
+        // 单批失败已被 compileTheoremPreviews 隔离，这里兜底意外异常。
         let theoremSvgs = [];
+        let thmStats = { cached: 0, compiled: 0, failed: 0 };
         if (parsed.theorems.length > 0 && parsed.preamble) {
             try {
-                theoremSvgs = await compileTheoremPreviews(parsed.preamble, parsed.theorems, preambleChanged);
+                const result = await compileTheoremPreviews(parsed.preamble, parsed.theorems, preambleChanged);
+                theoremSvgs = result.svgs;
+                thmStats = { cached: result.cached, compiled: result.compiled, failed: result.failed };
             } catch (err) {
                 console.error('LaTeX Helper: theorem preview batch compile failed', err);
             }
@@ -441,7 +470,13 @@ async function refreshFormulas(document) {
         currentPreamble = parsed.preamble;
         currentTheorems = parsed.theorems;
         currentFormulas = formulas;
-        formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Done' });
+        // 状态消息带缓存统计：缓存生效时全部是 cached，一眼可判断是否真在重编译
+        let doneMessage = 'Done: ' + formulaCached + ' cached, ' + formulaCompiled + ' compiled';
+        if (parsed.theorems.length > 0) {
+            doneMessage += ' | thm: ' + (thmStats.cached + thmStats.compiled) + ' ready';
+            if (thmStats.failed > 0) doneMessage += ', ' + thmStats.failed + ' failed';
+        }
+        formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: doneMessage });
         // 注意：不要在此重发 groupMode。刷新会重建 webview 状态前的默认值
         // （公式 section / 定理 type），重发会把定理默认冲成 section；
         // 用户显式切换时 setGroupMode 命令已单独 sendMessage（关闭时排队、ready 重放）。
