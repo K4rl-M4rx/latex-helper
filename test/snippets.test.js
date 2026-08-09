@@ -21,6 +21,7 @@ Module._cache['vscode-stub'] = {
 const { getModeAtPosition } = require('../src/utils/tex');
 const { expandBody } = require('../src/snippets/provider');
 const { normalizeSnippets } = require('../src/snippets/config');
+const { computeFraction } = require('../src/snippets/live-watcher');
 
 let passed = 0;
 let failed = 0;
@@ -135,7 +136,8 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
         { prefix: 'c$', body: 'C', priority: 5 },                     // 显式 priority 保留
         { prefix: 'd$', body: 'D', noPlaceholders: false },           // 显式 noPlaceholders 保留
         { prefix: 'e$', body: 'E', mode: 'maths', triggerWhenComplete: true },
-        { prefix: 'f$', body: 'SPECIAL_ACTION_BREAK' }                // 特殊动作被过滤（TODO 支持）
+        { prefix: 'f$', body: 'SPECIAL_ACTION_BREAK' },               // BREAK 未实现，仍被过滤
+        { prefix: 'g$', body: 'SPECIAL_ACTION_FRACTION', triggerWhenComplete: true } // FRACTION 保留并标记
     ]);
     const by = Object.fromEntries(out.map(s => [s.prefix, s]));
     check('无占位符 → noPlaceholders', by['a$'].noPlaceholders, true);
@@ -146,9 +148,58 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
     check('显式 noPlaceholders 保留', by['d$'].noPlaceholders, false);
     check('mode 缺省 → any', by['a$'].mode, 'any');
     check('triggerWhenComplete 保留', by['e$'].triggerWhenComplete, true);
-    check('SPECIAL_ACTION 被过滤', out.some(s => s.prefix === 'f$'), false);
-    // 排序：priority 5 在最前；e 也无占位符得 -0.1，与 a 同级按稳定顺序 e 在最后
-    check('按 priority 排序（首尾）', [out[0].prefix, out[out.length - 1].prefix].join(','), 'c$,e$');
+    check('SPECIAL_ACTION_BREAK 被过滤', out.some(s => s.prefix === 'f$'), false);
+    check('SPECIAL_ACTION_FRACTION 保留', 'g$' in by, true);
+    check('FRACTION 标记 specialAction', by['g$'] ? by['g$'].specialAction : null, 'fraction');
+    check('普通条目 specialAction 为 undefined', by['a$'].specialAction, undefined);
+    // 排序：priority 5 在最前；e/g 无占位符得 -0.1 在尾部（稳定序）
+    check('按 priority 排序（首位）', out[0].prefix, 'c$');
+}
+
+console.log('== computeFraction（SPECIAL_ACTION_FRACTION，对齐原插件 getFraction）==');
+{
+    const FRAC_PREFIX = '([)\\]}])/$';
+    const fracMatch = (text) => new RegExp(FRAC_PREFIX).exec(text);
+
+    // 基本：(x+1)/ → \frac{x+1}{$1} ，范围覆盖整段 (x+1)/
+    let m = fracMatch('(x+1)/');
+    let r = computeFraction('(x+1)/', m);
+    check('(x+1)/ 替换文本', r.replacement, '\\frac{x+1}{$1} ');
+    check('(x+1)/ 范围起点（开括号）', r.start, 0);
+    check('(x+1)/ 范围终点（含 /）', r.end, 6);
+
+    // 嵌套同种括号：(a(b+c))/
+    m = fracMatch('(a(b+c))/');
+    r = computeFraction('(a(b+c))/', m);
+    check('嵌套括号配对到最外层', r.replacement, '\\frac{a(b+c)}{$1} ');
+
+    // 方括号：[a+b]/
+    m = fracMatch('[a+b]/');
+    r = computeFraction('[a+b]/', m);
+    check('方括号 [a+b]/', r.replacement, '\\frac{a+b}{$1} ');
+
+    // 花括号吞掉前面的 \command：\hat{x}/ → \frac{\hat{x}{$1} 
+    //（末尾 } 正好闭合 \hat 组，与原插件 trick 一致）
+    m = fracMatch('\\hat{x}/');
+    r = computeFraction('\\hat{x}/', m);
+    check('\\hat{x}/ 吞掉 \\command', r.replacement, '\\frac{\\hat{x}{$1} ');
+    check('\\hat{x}/ 范围起点（\\ 处）', r.start, 0);
+
+    // 花括号无 command：{x}/
+    m = fracMatch('{x}/');
+    r = computeFraction('{x}/', m);
+    check('{x}/ 无 command', r.replacement, '\\frac{x}{$1} ');
+
+    // 找不到配对开括号：no-op（空范围 + 空替换）
+    m = fracMatch('x+1)/');
+    r = computeFraction('x+1)/', m);
+    check('无配对开括号 → 空替换', r.replacement, '');
+    check('无配对开括号 → 空范围（/ 之后）', r.start === r.end && r.end === 5, true);
+
+    // 前文有内容时范围只覆盖括号段：y=(x+1)/
+    m = fracMatch('y=(x+1)/');
+    r = computeFraction('y=(x+1)/', m);
+    check('y=(x+1)/ 只替换括号段', [r.start, r.end, r.replacement].join('|'), '2|8|\\frac{x+1}{$1} ');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

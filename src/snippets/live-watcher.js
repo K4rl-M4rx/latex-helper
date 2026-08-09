@@ -6,12 +6,55 @@
  * - 每次成功替换后累计偏移量 offset，并重新读取行文本
  * - sameChanges 去重，防止自己触发的编辑事件被重复处理
  * - noPlaceholders 直接替换文本；否则先删除匹配范围再 insertSnippet
+ * - SPECIAL_ACTION_FRACTION：闭括号向前配对开括号，整段替换为 \frac{内容}{$1}
  */
 
 const vscode = require('vscode');
 const { getLiveSnippets } = require('./config');
 const { getModeAtPosition } = require('../utils/tex');
 const { expandBody } = require('./provider');
+
+/**
+ * SPECIAL_ACTION_FRACTION 的核心计算（纯函数，便于单测）。
+ * 1:1 对齐原插件 getFraction：
+ * - match[1] 是闭括号 ) ] }，查表得开括号，从 match.index 向前 depth 计数，
+ *   depth 归 0 处即配对开括号（只计同一对括号字符）
+ * - 闭括号是 } 且开括号前紧邻 \command 时，把 \command 一并吞入替换范围，
+ *   内容保留 \command（如 \hat{x}/ → \frac{\hat{x}}{$1} ）
+ * - 找不到配对开括号时返回空范围 + 空替换（no-op，与原插件一致）
+ * @param {string} lineText
+ * @param {RegExpExecArray} match
+ * @returns {{ start: number, end: number, replacement: string }}
+ */
+function computeFraction(lineText, match) {
+    const closing = match[1];
+    const opening = { ')': '(', ']': '[', '}': '{' }[closing];
+    if (!opening) {
+        return { start: match.index + match[0].length, end: match.index + match[0].length, replacement: '' };
+    }
+    let depth = 0;
+    for (let i = match.index; i >= 0; i--) {
+        const ch = lineText[i];
+        if (ch === closing) depth--;
+        else if (ch === opening) depth++;
+        if (depth === 0) {
+            let command = '';
+            if (closing === '}') {
+                const commandMatch = /.*(\\\w+)$/.exec(lineText.substring(0, i));
+                if (commandMatch) {
+                    i -= commandMatch[1].length;
+                    command = '\\';
+                }
+            }
+            return {
+                start: i,
+                end: match.index + match[0].length,
+                replacement: '\\frac{' + command + lineText.substring(i + 1, match.index) + '}{$1} '
+            };
+        }
+    }
+    return { start: match.index + match[0].length, end: match.index + match[0].length, replacement: '' };
+}
 
 class LiveSnippetWatcher {
     constructor() {
@@ -94,6 +137,32 @@ class LiveSnippetWatcher {
         const match = snippet.prefixRegex.exec(line.text.substring(0, upto));
         if (!match) return undefined;
 
+        // SPECIAL_ACTION_FRACTION：替换范围向前延伸到配对开括号，强制 insertSnippet
+        // （replacement 含 $1 tabstop；原插件因 body 无 $$N 走纯文本会丢失 tabstop，
+        // 本项目按调研结论强制走 delete + insertSnippet 路径）
+        if (snippet.specialAction === 'fraction') {
+            const frac = computeFraction(line.text, match);
+            const fracRange = new vscode.Range(
+                new vscode.Position(line.lineNumber, frac.start),
+                new vscode.Position(line.lineNumber, frac.end)
+            );
+            this.isApplyingEdit = true;
+            try {
+                await editor.edit(editBuilder => {
+                    editBuilder.delete(fracRange);
+                }, { undoStopBefore: true, undoStopAfter: false });
+                if (frac.replacement === '') return 0; // 找不到配对开括号：no-op
+                await editor.insertSnippet(
+                    new vscode.SnippetString(frac.replacement),
+                    undefined,
+                    { undoStopBefore: true, undoStopAfter: true }
+                );
+                return frac.replacement.length - (frac.end - frac.start);
+            } finally {
+                this.isApplyingEdit = false;
+            }
+        }
+
         const range = new vscode.Range(
             new vscode.Position(line.lineNumber, match.index),
             new vscode.Position(line.lineNumber, match.index + match[0].length)
@@ -133,4 +202,4 @@ class LiveSnippetWatcher {
     }
 }
 
-module.exports = { LiveSnippetWatcher };
+module.exports = { LiveSnippetWatcher, computeFraction };

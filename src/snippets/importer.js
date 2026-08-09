@@ -42,12 +42,12 @@ async function importSnippets(_context) {
 
         // 过滤 + 转换（保留 triggerWhenComplete / priority / noPlaceholders，
         // 否则 getLiveSnippets() 为空，实时自动展开完全不工作）
-        // SPECIAL_ACTION 条目（FRACTION / BREAK / SYMPY）暂不支持（TODO），跳过；
+        // SPECIAL_ACTION_FRACTION 已实现、原样导入；BREAK / SYMPY 暂不支持（TODO），跳过；
         // 语义调研见 .trellis/tasks/07-26-special-action-support/research/
         let skipped = 0;
         const newSnippets = [];
         for (const s of oldSnippets) {
-            if (s.body && s.body.includes('SPECIAL_ACTION')) {
+            if (s.body && s.body.includes('SPECIAL_ACTION') && s.body !== 'SPECIAL_ACTION_FRACTION') {
                 skipped++;
                 continue;
             }

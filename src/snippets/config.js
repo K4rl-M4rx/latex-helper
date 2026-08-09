@@ -39,10 +39,11 @@ function getLiveSnippets() {
 
 /**
  * 返回用于标准补全列表的 snippets（triggerWhenComplete !== true）。
+ * SPECIAL_ACTION 条目不进入补全列表（不显示字面 SPECIAL_ACTION_* 文本）。
  * @returns {Array<NormalizedSnippet>}
  */
 function getCompletionSnippets() {
-    return getSnippets().filter(s => !s.triggerWhenComplete);
+    return getSnippets().filter(s => !s.triggerWhenComplete && !s.specialAction);
 }
 
 /**
@@ -55,6 +56,7 @@ function getCompletionSnippets() {
  * @property {boolean} triggerWhenComplete
  * @property {number} priority
  * @property {boolean} noPlaceholders
+ * @property {'fraction'|undefined} specialAction SPECIAL_ACTION 动作类型（目前仅 FRACTION）
  */
 
 /**
@@ -77,9 +79,15 @@ function normalizeSnippets(raw) {
 
         const body = typeof s.body === 'string' ? s.body : '';
 
-        // 过滤 latex-utilities 的特殊动作（TODO：FRACTION/BREAK/SYMPY 支持，
-        // 语义调研见 .trellis/tasks/archive/2026-08/07-26-special-action-support/research/）
-        if (body.startsWith('SPECIAL_ACTION')) continue;
+        // latex-utilities 特殊动作：FRACTION 已实现（见 live-watcher computeFraction），
+        // 保留并标记动作类型；BREAK / SYMPY 仍跳过（TODO，语义调研见
+        // .trellis/tasks/07-26-special-action-support/research/）
+        let specialAction;
+        if (body === 'SPECIAL_ACTION_FRACTION') {
+            specialAction = 'fraction';
+        } else if (body.startsWith('SPECIAL_ACTION')) {
+            continue;
+        }
 
         const prefix = typeof s.prefix === 'string' ? s.prefix : '';
         let prefixRegex;
@@ -119,7 +127,8 @@ function normalizeSnippets(raw) {
             description,
             triggerWhenComplete,
             priority,
-            noPlaceholders
+            noPlaceholders,
+            specialAction
         });
     }
 
