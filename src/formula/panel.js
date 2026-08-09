@@ -290,6 +290,10 @@ function getBrowserHtml(cspSource) {
             overflow: hidden;
         }
         .thm-body { margin-top: 6px; }
+        /* 折叠态：编译预览裁剪为一行，底部渐隐提示还有更多内容 */
+        .thm-body.peek { position: relative; max-height: 1.55em; overflow: hidden; }
+        .thm-body.peek::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 0.7em; background: linear-gradient(transparent, var(--vscode-editor-background)); }
+        .thm-body.peek .svg-wrap { margin-bottom: 0; }
         .thm-loading {
             font-size: 11px;
             color: var(--vscode-descriptionForeground);
@@ -515,17 +519,25 @@ function getBrowserHtml(cspSource) {
                     render();
                     break;
                 case 'theoremSvg': {
-                    // 定理懒编译结果到达：缓存并按需填入展开的卡片
+                    // 单条定理懒编译结果到达：缓存并填入卡片（展开显示完整，折叠显示一行预览）
                     theoremPending[msg.label] = false;
                     const bodyEl = theoremBodyEls[msg.label];
                     if (msg.svg) {
                         theoremSvgs[msg.label] = msg.svg;
-                        if (bodyEl && expandedTheorems[msg.label]) {
+                        if (bodyEl) {
                             bodyEl.innerHTML = '<div class="svg-wrap">' + injectWhiteBackground(msg.svg) + '</div>';
+                            bodyEl.style.display = '';
+                            bodyEl.classList.toggle('peek', expandedTheorems[msg.label] !== true);
                         }
                     } else if (bodyEl && expandedTheorems[msg.label]) {
                         bodyEl.innerHTML = '<div class="thm-loading" style="color:var(--vscode-errorForeground);">Preview failed: ' + escapeHtml(msg.error || 'compile error') + '</div>';
                     }
+                    break;
+                }
+                case 'theoremSvgs': {
+                    // 批量定理预览到达（刷新后推送）：并入缓存并重渲染，折叠卡片显示一行预览
+                    (msg.svgs || []).forEach(s => { if (s && s.svg) theoremSvgs[s.label] = s.svg; });
+                    render();
                     break;
                 }
                 case 'clear':
@@ -667,30 +679,29 @@ function getBrowserHtml(cspSource) {
             const div = document.createElement('div');
             div.className = 'formula-item' + (t.referenced ? '' : ' unreferenced');
             div.draggable = true;
-            div.title = 'Click: expand preview | Cmd/Ctrl+click: copy label | drag: insert \\\\ref | Cmd/Ctrl+drag: insert source | double-click: goto source';
+            div.title = 'Click: expand/collapse | Cmd/Ctrl+click: copy label | drag: insert \\\\ref | Cmd/Ctrl+drag: insert source | double-click: goto source';
             const isExpanded = expandedTheorems[t.label] === true;
             let html = '<div class="thm-head">' + arrowHtml(!isExpanded) + '<span class="thm-env">' + escapeHtml(t.envType) + '</span><span class="label">' + escapeHtml(t.label) + '</span></div>';
-            if (t.note) html += '<div class="thm-note">[' + escapeHtml(t.note) + ']</div>';
-            if (t.preview) html += '<div class="thm-preview">' + escapeHtml(t.preview) + '</div>';
             const sectionInfo = (t.section ? '§' + t.section : '') + (t.subsection ? ' › ' + t.subsection : '');
             html += '<div class="formula-meta"><span class="line">L' + t.line + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
             div.innerHTML = html;
 
-            // 展开区：懒编译的定理完整内容（PDF 剪切效果）
+            // 预览区：折叠时裁剪显示编译内容的第一行（天然一行信息），点击展开完整定理
             const bodyEl = document.createElement('div');
             bodyEl.className = 'thm-body';
-            bodyEl.style.display = 'none';
             div.appendChild(bodyEl);
             theoremBodyEls[t.label] = bodyEl;
             const arrowEl = div.querySelector('.thm-head .arrow');
-            if (isExpanded) {
-                // 重渲染后恢复展开状态与已缓存内容
+            if (theoremSvgs[t.label]) {
+                bodyEl.innerHTML = '<div class="svg-wrap">' + injectWhiteBackground(theoremSvgs[t.label]) + '</div>';
                 bodyEl.style.display = '';
-                if (theoremSvgs[t.label]) {
-                    bodyEl.innerHTML = '<div class="svg-wrap">' + injectWhiteBackground(theoremSvgs[t.label]) + '</div>';
-                } else {
-                    requestTheoremPreview(t, bodyEl);
-                }
+                bodyEl.classList.toggle('peek', !isExpanded);
+            } else if (isExpanded) {
+                // 重渲染后恢复展开状态；尚无缓存时走懒编译
+                bodyEl.style.display = '';
+                requestTheoremPreview(t, bodyEl);
+            } else {
+                bodyEl.style.display = 'none';
             }
 
             // 单击展开/收起；250ms 延迟以区分双击跳转
@@ -731,14 +742,20 @@ function getBrowserHtml(cspSource) {
         function toggleTheoremExpand(t, bodyEl, arrowEl) {
             const willExpand = expandedTheorems[t.label] !== true;
             expandedTheorems[t.label] = willExpand;
-            bodyEl.style.display = willExpand ? '' : 'none';
             if (arrowEl) arrowEl.classList.toggle('expanded', willExpand);
             if (willExpand) {
+                bodyEl.classList.remove('peek');
+                bodyEl.style.display = '';
                 if (theoremSvgs[t.label]) {
                     bodyEl.innerHTML = '<div class="svg-wrap">' + injectWhiteBackground(theoremSvgs[t.label]) + '</div>';
                 } else {
                     requestTheoremPreview(t, bodyEl);
                 }
+            } else if (theoremSvgs[t.label]) {
+                // 收起后保留一行编译预览
+                bodyEl.classList.add('peek');
+            } else {
+                bodyEl.style.display = 'none';
             }
         }
 

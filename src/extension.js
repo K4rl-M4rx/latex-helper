@@ -277,6 +277,42 @@ function requestRefresh(document) {
 }
 
 /**
+ * 批量编译定理预览 SVG：按 bodyHash 去重并复用公式的增量缓存目录，新结果写回缓存。
+ * 折叠的定理卡片用该 SVG 裁剪出一行编译预览，点击展开显示完整内容。
+ * @param {string} preamble
+ * @param {Array<{label: string, body: string, bodyHash: string}>} theorems
+ * @param {boolean} preambleChanged
+ * @returns {Promise<Array<{label: string, svg: string}>>}
+ */
+async function compileTheoremPreviews(preamble, theorems, preambleChanged) {
+    // 按 bodyHash 去重：内容相同的定理只编译一次
+    const svgByHash = new Map();
+    const toCompile = [];
+    for (const t of theorems) {
+        if (svgByHash.has(t.bodyHash)) continue;
+        let svg = '';
+        const svgPath = path.join(cacheDir, t.bodyHash + '.svg');
+        if (!preambleChanged && fs.existsSync(svgPath)) {
+            try { svg = fs.readFileSync(svgPath, 'utf-8'); } catch { svg = ''; }
+        }
+        svgByHash.set(t.bodyHash, svg);
+        if (!svg) toCompile.push({ label: t.bodyHash, body: t.body });
+    }
+    if (toCompile.length > 0) {
+        const compiled = await compileFormulas(preamble, toCompile);
+        for (let i = 0; i < toCompile.length; i++) {
+            const hash = toCompile[i].label;
+            const svg = compiled[i] ? compiled[i].svg : '';
+            svgByHash.set(hash, svg);
+            if (svg) {
+                try { fs.writeFileSync(path.join(cacheDir, hash + '.svg'), svg, 'utf-8'); } catch { /* 缓存写失败不影响显示 */ }
+            }
+        }
+    }
+    return theorems.map(t => ({ label: t.label, svg: svgByHash.get(t.bodyHash) || '' }));
+}
+
+/**
  * 刷新公式面板。
  * @param {vscode.TextDocument} document
  */
@@ -361,6 +397,18 @@ async function refreshFormulas(document) {
             // 无公式不代表无定理：清空公式列表但保留定理视图数据
             formulaBrowser.update([], parsed.theorems);
         }
+
+        // 定理预览批量编译：与公式共用 bodyHash 增量缓存。
+        // 批量失败不阻塞刷新：一行预览缺失，展开时仍可单条懒编译兜底。
+        let theoremSvgs = [];
+        if (parsed.theorems.length > 0 && parsed.preamble) {
+            try {
+                theoremSvgs = await compileTheoremPreviews(parsed.preamble, parsed.theorems, preambleChanged);
+            } catch (err) {
+                console.error('LaTeX Helper: theorem preview batch compile failed', err);
+            }
+        }
+        formulaBrowser.sendMessage({ type: 'theoremSvgs', svgs: theoremSvgs });
 
         currentPreambleHash = parsed.preambleHash;
         currentPreamble = parsed.preamble;
