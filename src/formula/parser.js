@@ -35,13 +35,35 @@ const {
  *   }>
  * }}
  */
+/**
+ * 把未转义 % 之后的注释内容替换为等长空格（源文件不动，只在内存中处理）。
+ * 被注释的 \begin/\label/\ref/\section 对解析不可见，自然不会进列表、不会编译；
+ * 行数与列位置保持不变，gotoLine 行号与原文档一致。
+ * 已知限制：verbatim / lstlisting 内的 % 也会被当作注释（论文场景极少）。
+ * @param {string} text
+ * @returns {string}
+ */
+function stripComments(text) {
+    return text.split('\n').map(line => {
+        let i = 0;
+        while (i < line.length) {
+            if (line[i] === '\\') { i += 2; continue; } // 跳过转义对：\% 是字面百分号、\\ 是换行命令
+            if (line[i] === '%') return line.slice(0, i).padEnd(line.length, ' ');
+            i++;
+        }
+        return line;
+    }).join('\n');
+}
+
 function parseDocument(text) {
-    const preamble = extractPreamble(text);
+    // 全文先剥离注释：注释掉的公式/定理/引用/章节一律不参与解析与编译
+    const clean = stripComments(text);
+    const preamble = extractPreamble(clean);
     const preambleHash = computeHash(preamble);
 
-    const envs = findFormulaEnvironments(text);
-    const refs = findReferences(text);
-    const sections = findSections(text);
+    const envs = findFormulaEnvironments(clean);
+    const refs = findReferences(clean);
+    const sections = findSections(clean);
 
     /** @type {Array} */
     const formulas = [];
@@ -69,7 +91,7 @@ function parseDocument(text) {
 
     // 定理类环境：内置名 + preamble 中 \newtheorem 声明的自定义名
     const theoremEnvNames = [...THEOREM_ENVIRONMENTS, ...extractNewtheoremNames(preamble)];
-    const theoremEnvs = findEnvironments(text, theoremEnvNames);
+    const theoremEnvs = findEnvironments(clean, theoremEnvNames);
 
     /** @type {Array} */
     const theorems = [];
@@ -202,4 +224,4 @@ function computeHash(content) {
     return crypto.createHash('sha256').update(content).digest('hex').substring(0, 16);
 }
 
-module.exports = { parseDocument, deduplicateFormulas, computeHash };
+module.exports = { parseDocument, deduplicateFormulas, computeHash, stripComments };

@@ -18,7 +18,7 @@ Module._cache['vscode-stub'] = {
     }
 };
 
-const { parseDocument } = require('../src/formula/parser');
+const { parseDocument, stripComments } = require('../src/formula/parser');
 
 let passed = 0;
 let failed = 0;
@@ -92,6 +92,41 @@ check('equation 收录', 'eq:a' in formulasByLabel, true);
 check('equation 被 \\eqref 引用', formulasByLabel['eq:a'].referenced, true);
 check('starred 环境 align* 收录（* 转义修复）', 'eq:star' in formulasByLabel, true);
 check('align* 环境类型', formulasByLabel['eq:star'] ? formulasByLabel['eq:star'].envType : null, 'align*');
+
+console.log('== 注释剥离（% 注释的内容不参与解析与编译）==');
+
+const texCommented = [
+    '\\documentclass{article}',
+    '\\begin{document}',
+    '\\section{Real}',
+    '% \\section{Ghost}',
+    '\\begin{equation}\\label{eq:real}',
+    'a=b',
+    '\\end{equation}',
+    '% \\begin{lemma}\\label{lem:commented}',
+    '% Commented out.',
+    '% \\end{lemma}',
+    '\\begin{lemma}\\label{lem:active}',
+    'Active. % trailing comment with \\ref{eq:real}',
+    '\\end{lemma}',
+    '% See \\ref{eq:real} here',
+    'Escaped percent 50\\% off.',
+    '\\end{document}'
+].join('\n');
+
+const parsedC = parseDocument(texCommented);
+const thmC = Object.fromEntries(parsedC.theorems.map(t => [t.label, t]));
+const fmC = Object.fromEntries(parsedC.formulas.map(f => [f.label, f]));
+
+check('注释掉的引理不被收录', 'lem:commented' in thmC, false);
+check('未注释的引理正常收录', 'lem:active' in thmC, true);
+check('注释里的 \\ref 不算引用', fmC['eq:real'].referenced, false);
+check('注释掉的 \\section 不产生幽灵分组', fmC['eq:real'].section, 'Real');
+check('行尾注释后内容仍解析（引理收录且 section 正确）', thmC['lem:active'].section, 'Real');
+check('注释剥离后行号与原文一致', thmC['lem:active'].line, 11);
+check('转义 \\% 不被当作注释', stripComments('50\\% off. % gone'), '50\\% off.       ');
+check('\\\\ 后的 % 仍是注释', stripComments('x \\\\ % gone'), 'x \\\\       ');
+check('剥离保持等长（行号列号不变）', stripComments('a % bc').length, 'a % bc'.length);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
