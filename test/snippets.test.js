@@ -21,7 +21,7 @@ Module._cache['vscode-stub'] = {
 const { getModeAtPosition } = require('../src/utils/tex');
 const { expandBody } = require('../src/snippets/provider');
 const { normalizeSnippets } = require('../src/snippets/config');
-const { computeFraction } = require('../src/snippets/live-watcher');
+const { computeFraction, buildSympyCommand, buildSympyScript } = require('../src/snippets/live-watcher');
 
 let passed = 0;
 let failed = 0;
@@ -136,8 +136,10 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
         { prefix: 'c$', body: 'C', priority: 5 },                     // 显式 priority 保留
         { prefix: 'd$', body: 'D', noPlaceholders: false },           // 显式 noPlaceholders 保留
         { prefix: 'e$', body: 'E', mode: 'maths', triggerWhenComplete: true },
-        { prefix: 'f$', body: 'SPECIAL_ACTION_BREAK' },               // BREAK 未实现，仍被过滤
-        { prefix: 'g$', body: 'SPECIAL_ACTION_FRACTION', triggerWhenComplete: true } // FRACTION 保留并标记
+        { prefix: 'f$', body: 'SPECIAL_ACTION_BREAK', triggerWhenComplete: true },
+        { prefix: 'g$', body: 'SPECIAL_ACTION_FRACTION', triggerWhenComplete: true },
+        { prefix: 'h$', body: 'SPECIAL_ACTION_SYMPY', triggerWhenComplete: true },
+        { prefix: 'i$', body: 'SPECIAL_ACTION_UNKNOWN' }              // 未知动作仍被过滤
     ]);
     const by = Object.fromEntries(out.map(s => [s.prefix, s]));
     check('无占位符 → noPlaceholders', by['a$'].noPlaceholders, true);
@@ -148,12 +150,26 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
     check('显式 noPlaceholders 保留', by['d$'].noPlaceholders, false);
     check('mode 缺省 → any', by['a$'].mode, 'any');
     check('triggerWhenComplete 保留', by['e$'].triggerWhenComplete, true);
-    check('SPECIAL_ACTION_BREAK 被过滤', out.some(s => s.prefix === 'f$'), false);
-    check('SPECIAL_ACTION_FRACTION 保留', 'g$' in by, true);
-    check('FRACTION 标记 specialAction', by['g$'] ? by['g$'].specialAction : null, 'fraction');
+    check('SPECIAL_ACTION_BREAK 保留并标记', by['f$'] ? by['f$'].specialAction : null, 'break');
+    check('SPECIAL_ACTION_FRACTION 保留并标记', by['g$'] ? by['g$'].specialAction : null, 'fraction');
+    check('SPECIAL_ACTION_SYMPY 保留并标记', by['h$'] ? by['h$'].specialAction : null, 'sympy');
+    check('未知 SPECIAL_ACTION 被过滤', out.some(s => s.prefix === 'i$'), false);
     check('普通条目 specialAction 为 undefined', by['a$'].specialAction, undefined);
-    // 排序：priority 5 在最前；e/g 无占位符得 -0.1 在尾部（稳定序）
+    // 排序：priority 5 在最前
     check('按 priority 排序（首位）', out[0].prefix, 'c$');
+}
+
+console.log('== buildSympyCommand / buildSympyScript（SPECIAL_ACTION_SYMPY）==');
+{
+    check('多项式 ^ → **', buildSympyCommand('x^2+2*x+1'), 'x**2+2*x+1');
+    check('\\sqrt{x} → sqrt(x)', buildSympyCommand('\\sqrt{x}'), 'sqrt(x)');
+    check('\\command 吃掉一个空格', buildSympyCommand('\\int x'), 'intx');
+    check('仅首个 ^ 被替换（与原插件一致）', buildSympyCommand('x^2^3'), 'x**2^3');
+    check('仅首对 {} 被替换（与原插件一致）', buildSympyCommand('{a}{b}'), '(a){b}');
+    const script = buildSympyScript('x**2+2*x+1');
+    check('脚本含 latex() 求值', script.includes('eval("latex(x**2+2*x+1)")'), true);
+    check('脚本预定义符号', script.includes("symbols('a b c x y z t')"), true);
+    check('命令内引号被 JSON 转义', buildSympyScript('a"b').includes('\\"'), true);
 }
 
 console.log('== computeFraction（SPECIAL_ACTION_FRACTION，对齐原插件 getFraction）==');

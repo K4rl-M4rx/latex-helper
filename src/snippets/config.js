@@ -8,6 +8,13 @@ const vscode = require('vscode');
 /** 配置缓存有效期（毫秒），与原插件 MAX_CONFIG_AGE 一致 */
 const MAX_CONFIG_AGE = 5000;
 
+/** latex-utilities SPECIAL_ACTION body → 动作类型标记 */
+const SPECIAL_ACTIONS = {
+    SPECIAL_ACTION_FRACTION: 'fraction',
+    SPECIAL_ACTION_BREAK: 'break',
+    SPECIAL_ACTION_SYMPY: 'sympy'
+};
+
 /** @type {{ snippets: Array<NormalizedSnippet>, raw: string, age: number } | null} */
 let cache = null;
 
@@ -56,7 +63,7 @@ function getCompletionSnippets() {
  * @property {boolean} triggerWhenComplete
  * @property {number} priority
  * @property {boolean} noPlaceholders
- * @property {'fraction'|undefined} specialAction SPECIAL_ACTION 动作类型（目前仅 FRACTION）
+ * @property {'fraction'|'break'|'sympy'|undefined} specialAction SPECIAL_ACTION 动作类型
  */
 
 /**
@@ -79,15 +86,10 @@ function normalizeSnippets(raw) {
 
         const body = typeof s.body === 'string' ? s.body : '';
 
-        // latex-utilities 特殊动作：FRACTION 已实现（见 live-watcher computeFraction），
-        // 保留并标记动作类型；BREAK / SYMPY 仍跳过（TODO，语义调研见
-        // .trellis/tasks/07-26-special-action-support/research/）
-        let specialAction;
-        if (body === 'SPECIAL_ACTION_FRACTION') {
-            specialAction = 'fraction';
-        } else if (body.startsWith('SPECIAL_ACTION')) {
-            continue;
-        }
+        // latex-utilities 特殊动作：FRACTION / BREAK / SYMPY 均已实现（见 live-watcher），
+        // 保留并标记动作类型；原插件之外的未知 SPECIAL_ACTION_* 仍跳过
+        const specialAction = SPECIAL_ACTIONS[body];
+        if (!specialAction && body.startsWith('SPECIAL_ACTION')) continue;
 
         const prefix = typeof s.prefix === 'string' ? s.prefix : '';
         let prefixRegex;

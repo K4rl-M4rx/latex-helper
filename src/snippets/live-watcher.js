@@ -10,9 +10,45 @@
  */
 
 const vscode = require('vscode');
+const { execFile } = require('child_process');
 const { getLiveSnippets } = require('./config');
 const { getModeAtPosition } = require('../utils/tex');
 const { expandBody } = require('./provider');
+
+/** sympy 求值占位符：匹配后先同步插入，异步替换为 sympy 的 LaTeX 输出 */
+const SYMPY_PLACEHOLDER = 'SYMPY_CALCULATING';
+/** sympy 求值失败时短暂显示的文本（400ms 后删除） */
+const SYMPY_ERROR = 'SYMPY_ERROR';
+
+/**
+ * 捕获组表达式 → sympy 可求值形式（1:1 原插件转换规则）：
+ * \command + 可选空格 → command；^ → **；{ → (；} → )（后三项仅替换首个，与原插件一致）
+ * @param {string} expr
+ * @returns {string}
+ */
+function buildSympyCommand(expr) {
+    return expr
+        .replace(/\\(\w+) ?/g, '$1')
+        .replace(/\^/, '**')
+        .replace('{', '(')
+        .replace('}', ')');
+}
+
+/**
+ * 生成 python3 -c 脚本（符号预定义与原插件一致）。
+ * eval 参数用 JSON 字符串字面量注入，避免命令内引号破坏脚本（比原插件 shell 拼接更安全）。
+ * @param {string} command
+ * @returns {string}
+ */
+function buildSympyScript(command) {
+    return 'from sympy import *\n' +
+        'import re\n' +
+        "a, b, c, x, y, z, t = symbols('a b c x y z t')\n" +
+        "k, m, n = symbols('k m n', integer=True)\n" +
+        "f, g, h = symbols('f g h', cls=Function)\n" +
+        'init_printing()\n' +
+        'print(eval(' + JSON.stringify('latex(' + command + ')') + "), end='')";
+}
 
 /**
  * SPECIAL_ACTION_FRACTION 的核心计算（纯函数，便于单测）。
@@ -98,6 +134,8 @@ class LiveSnippetWatcher {
                 if (s.mode !== 'any' && s.mode !== mode) continue;
 
                 const delta = await this.execSnippet(s, line, change, offset);
+                // SPECIAL_ACTION_BREAK：熔断哨兵，当前 change 不再尝试后续 snippet
+                if (delta === 'break') break;
                 if (delta !== undefined) {
                     offset += delta;
                     line = event.document.lineAt(change.range.start.line);
@@ -136,6 +174,27 @@ class LiveSnippetWatcher {
         const upto = change.range.start.character + change.text.length + offset;
         const match = snippet.prefixRegex.exec(line.text.substring(0, upto));
         if (!match) return undefined;
+
+        // SPECIAL_ACTION_BREAK：熔断哨兵（无文本替换）
+        if (snippet.specialAction === 'break') return 'break';
+
+        // SPECIAL_ACTION_SYMPY：先把匹配文本替换为占位符，异步求值后替换为结果
+        if (snippet.specialAction === 'sympy') {
+            const sympyRange = new vscode.Range(
+                new vscode.Position(line.lineNumber, match.index),
+                new vscode.Position(line.lineNumber, match.index + match[0].length)
+            );
+            const placeholder = this.execSympy(match);
+            this.isApplyingEdit = true;
+            try {
+                await editor.edit(editBuilder => {
+                    editBuilder.replace(sympyRange, placeholder);
+                }, { undoStopBefore: true, undoStopAfter: true });
+                return placeholder.length - match[0].length;
+            } finally {
+                this.isApplyingEdit = false;
+            }
+        }
 
         // SPECIAL_ACTION_FRACTION：替换范围向前延伸到配对开括号，强制 insertSnippet
         // （replacement 含 $1 tabstop；原插件因 body 无 $$N 走纯文本会丢失 tabstop，
@@ -200,6 +259,94 @@ class LiveSnippetWatcher {
             this.isApplyingEdit = false;
         }
     }
+
+    /**
+     * SPECIAL_ACTION_SYMPY：启动 python3 + sympy 异步求值，返回占位符。
+     * 求值完成后把占位符替换为 LaTeX 输出；失败则短暂显示 SYMPY_ERROR（400ms 后删除）。
+     * 占位符定位不靠记忆 range（期间用户可能继续编辑），而是在文档中重新搜索。
+     * @param {RegExpExecArray} match
+     * @returns {string} 占位符文本
+     */
+    execSympy(match) {
+        const command = buildSympyCommand(match[1]);
+        const script = buildSympyScript(command);
+        // python 路径可配置：pipx/venv 装的 sympy 不在系统 python3 的 site-packages 里；
+        // execFile 不走 shell，~ 不会展开，这里手动展开
+        let pythonPath = vscode.workspace.getConfiguration('latex-helper').get('sympyPythonPath', 'python3');
+        if (pythonPath.startsWith('~/')) {
+            pythonPath = require('os').homedir() + pythonPath.slice(1);
+        }
+        execFile(pythonPath, ['-c', script], { timeout: 15000 }, (err, stdout, stderr) => {
+            this.applySympyResult(command, err, stdout, stderr);
+        });
+        return SYMPY_PLACEHOLDER;
+    }
+
+    /**
+     * sympy 求值回调：在文档中搜索占位符并替换为结果；找不到说明用户已改动，放弃。
+     * @param {string} command 求值命令（日志用）
+     * @param {Error | null} err
+     * @param {string} stdout
+     * @param {string} stderr
+     */
+    applySympyResult(command, err, stdout, stderr) {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) return;
+            const failed = Boolean(err) || Boolean(stderr);
+            if (failed) {
+                console.error('LaTeX Helper: sympy failed for', command, err ? err.message : stderr);
+            }
+            const result = failed ? SYMPY_ERROR : stdout;
+
+            // 全文搜索占位符（通常在同一行；用户期间编辑过也能找到）
+            const fullText = editor.document.getText();
+            const idx = fullText.indexOf(SYMPY_PLACEHOLDER);
+            if (idx === -1) return; // 占位符已被用户删掉/改动，不干预
+            const startPos = editor.document.positionAt(idx);
+            const range = new vscode.Range(startPos, startPos.translate(0, SYMPY_PLACEHOLDER.length));
+
+            this.isApplyingEdit = true;
+            editor.edit(editBuilder => {
+                editBuilder.replace(range, result);
+            }, { undoStopBefore: false, undoStopAfter: false }).then((applied) => {
+                this.isApplyingEdit = false;
+                if (!applied) {
+                    console.error('LaTeX Helper: sympy result edit was not applied');
+                    return;
+                }
+                if (failed) {
+                    setTimeout(() => {
+                        // 重新搜索 SYMPY_ERROR 位置再删（期间可能又变化）
+                        const text = editor.document.getText();
+                        const eidx = text.indexOf(SYMPY_ERROR);
+                        if (eidx === -1) return;
+                        const es = editor.document.positionAt(eidx);
+                        const eRange = new vscode.Range(es, es.translate(0, SYMPY_ERROR.length));
+                        this.isApplyingEdit = true;
+                        editor.edit(editBuilder => {
+                            editBuilder.delete(eRange);
+                        }, { undoStopBefore: false, undoStopAfter: false }).then(() => {
+                            this.isApplyingEdit = false;
+                        }, () => { this.isApplyingEdit = false; });
+                    }, 400);
+                }
+            }, (editErr) => {
+                this.isApplyingEdit = false;
+                console.error('LaTeX Helper: sympy result edit failed', editErr);
+            });
+        } catch (callbackErr) {
+            this.isApplyingEdit = false;
+            console.error('LaTeX Helper: sympy callback error', callbackErr);
+        }
+    }
 }
 
-module.exports = { LiveSnippetWatcher, computeFraction };
+module.exports = {
+    LiveSnippetWatcher,
+    computeFraction,
+    buildSympyCommand,
+    buildSympyScript,
+    SYMPY_PLACEHOLDER,
+    SYMPY_ERROR
+};

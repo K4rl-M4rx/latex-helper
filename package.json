@@ -73,6 +73,11 @@
           "default": "dvisvgm",
           "description": "Path to dvisvgm executable"
         },
+        "latex-helper.sympyPythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Path to python3 with sympy installed (e.g. ~/.local/pipx/venvs/sympy/bin/python3 for pipx installs)"
+        },
         "latex-helper.auxPath": {
           "type": "string",
           "default": "./temp",
