@@ -19,6 +19,24 @@ function getCacheDir(context) {
 }
 
 /**
+ * 项目内缓存目录：<workspaceRoot>/temp/latex-helper-cache/。
+ * 编译产物（SVG）属于项目，放项目里方便查看与随项目迁移；删除无副作用，
+ * 按 bodyHash 重新编译即可。目录内写自忽略 .gitignore（内容 *），
+ * 不污染宿主项目的 git status。
+ * @param {string} workspaceRoot
+ * @returns {string}
+ */
+function getProjectCacheDir(workspaceRoot) {
+    const dir = path.join(workspaceRoot, 'temp', 'latex-helper-cache');
+    fs.mkdirSync(dir, { recursive: true });
+    const gitignore = path.join(dir, '.gitignore');
+    if (!fs.existsSync(gitignore)) {
+        fs.writeFileSync(gitignore, '*\n', 'utf-8');
+    }
+    return dir;
+}
+
+/**
  * @param {string} content
  * @returns {string}
  */
@@ -107,4 +125,4 @@ function clearCache(cacheDir) {
     }
 }
 
-module.exports = { getCacheDir, computeHash, needsRecompile, writeCache, readAllFromCache, clearCache };
+module.exports = { getCacheDir, getProjectCacheDir, computeHash, needsRecompile, writeCache, readAllFromCache, clearCache };
