@@ -278,6 +278,8 @@ function getBrowserHtml(cspSource) {
             color: var(--vscode-badge-foreground);
         }
         .thm-head .label { font-family: var(--vscode-editor-font-family); color: var(--vscode-textLink-foreground); font-size: 12px; }
+        /* 行号 | §章节：与 envType/label 同一行，右对齐，过长省略 */
+        .thm-head .thm-loc { margin-left: auto; font-size: 11px; font-weight: 400; text-transform: none; color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
         .thm-note { font-size: 11px; font-style: italic; margin-bottom: 4px; }
         .thm-preview {
             font-size: 11px;
@@ -290,10 +292,11 @@ function getBrowserHtml(cspSource) {
             overflow: hidden;
         }
         .thm-body { margin-top: 6px; }
-        /* 折叠态：编译预览裁剪为一行，底部渐隐提示还有更多内容 */
-        .thm-body.peek { position: relative; max-height: 1.55em; overflow: hidden; }
-        .thm-body.peek::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 0.7em; background: linear-gradient(transparent, var(--vscode-editor-background)); }
-        .thm-body.peek .svg-wrap { margin-bottom: 0; }
+        /* 折叠态：编译预览裁剪为一行，左对齐不缩放保持字号可读，右端渐隐提示还有更多 */
+        .thm-body.peek { position: relative; max-height: 1.75em; overflow: hidden; }
+        .thm-body.peek::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 36px; background: linear-gradient(to left, var(--vscode-editor-background), transparent); }
+        .thm-body.peek .svg-wrap { text-align: left; overflow-x: hidden; margin-bottom: 0; }
+        .thm-body.peek .svg-wrap svg { max-width: none; margin: 0; }
         .thm-loading {
             font-size: 11px;
             color: var(--vscode-descriptionForeground);
@@ -681,9 +684,9 @@ function getBrowserHtml(cspSource) {
             div.draggable = true;
             div.title = 'Click: expand/collapse | Cmd/Ctrl+click: copy label | drag: insert \\\\ref | Cmd/Ctrl+drag: insert source | double-click: goto source';
             const isExpanded = expandedTheorems[t.label] === true;
-            let html = '<div class="thm-head">' + arrowHtml(!isExpanded) + '<span class="thm-env">' + escapeHtml(t.envType) + '</span><span class="label">' + escapeHtml(t.label) + '</span></div>';
             const sectionInfo = (t.section ? '§' + t.section : '') + (t.subsection ? ' › ' + t.subsection : '');
-            html += '<div class="formula-meta"><span class="line">L' + t.line + (sectionInfo ? ' | <span class="sec-info">' + escapeHtml(sectionInfo) + '</span>' : '') + '</span></div>';
+            let html = '<div class="thm-head">' + arrowHtml(!isExpanded) + '<span class="thm-env">' + escapeHtml(t.envType) + '</span><span class="label">' + escapeHtml(t.label) + '</span>' +
+                '<span class="thm-loc">L' + t.line + (sectionInfo ? ' | ' + escapeHtml(sectionInfo) : '') + '</span></div>';
             div.innerHTML = html;
 
             // 预览区：折叠时裁剪显示编译内容的第一行（天然一行信息），点击展开完整定理

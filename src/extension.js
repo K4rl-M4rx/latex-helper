@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { parseDocument, deduplicateFormulas } = require('./formula/parser');
 const { compileFormulas } = require('./formula/compiler');
-const { getCacheDir, writeCache, clearCache: clearCacheDir } = require('./formula/cache');
+const { getCacheDir, getProjectCacheDir, writeCache, clearCache: clearCacheDir } = require('./formula/cache');
 const { FormulaPanelProvider } = require('./formula/panel');
 const { FormulaBrowser } = require('./formula/browser');
 const { GroupModeTreeProvider } = require('./tree/group-mode');
@@ -42,6 +42,9 @@ let groupMode = 'section';
 /** @type {string} */
 let cacheDir = '';
 
+/** @type {vscode.ExtensionContext | null} activate 时保存，供 refresh 中持久化 preambleHash */
+let extensionContext = null;
+
 /** @type {vscode.TextDocument | null} */
 let activeLatexDoc = null;
 
@@ -55,8 +58,28 @@ let queuedRefreshDoc = null;
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    // 初始化缓存目录
-    cacheDir = getCacheDir(context);
+    // 初始化缓存目录：优先项目 temp/latex-helper-cache（编译产物属于项目，
+    // 删除后按 bodyHash 重编即可），无工作区或创建失败时回退 globalStorage
+    const wsRoot = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0]
+        ? vscode.workspace.workspaceFolders[0].uri.fsPath
+        : null;
+    try {
+        cacheDir = wsRoot ? getProjectCacheDir(wsRoot) : getCacheDir(context);
+    } catch {
+        cacheDir = getCacheDir(context);
+    }
+    extensionContext = context;
+    // 恢复上次会话的 preambleHash：否则重启后恒为 ''，refresh 误判 preamble 已变化，
+    // 公式与定理全部无视磁盘缓存全量重编译（表现为"重新打开还是要加载很久"）
+    currentPreambleHash = context.workspaceState.get('latex-helper.preambleHash', '');
+
+    // 缓存格式版本：v3 = dvisvgm --no-fonts + 显式 width/height + id 命名空间隔离。
+    // v1 内嵌字体子集互相覆盖；v2 矢量路径但同名 id 跨 SVG 冲突，均需作废重编译。
+    if (context.workspaceState.get('latex-helper.cacheVersion', 1) < 3) {
+        clearCacheDir(cacheDir);
+        currentPreambleHash = '';
+        context.workspaceState.update('latex-helper.cacheVersion', 3);
+    }
 
     // 注册公式面板 WebviewView Provider（侧边栏）
     panelProvider = new FormulaPanelProvider(context);
@@ -411,6 +434,10 @@ async function refreshFormulas(document) {
         formulaBrowser.sendMessage({ type: 'theoremSvgs', svgs: theoremSvgs });
 
         currentPreambleHash = parsed.preambleHash;
+        // 持久化 preambleHash，供下次启动恢复（见 activate）
+        if (extensionContext) {
+            extensionContext.workspaceState.update('latex-helper.preambleHash', parsed.preambleHash);
+        }
         currentPreamble = parsed.preamble;
         currentTheorems = parsed.theorems;
         currentFormulas = formulas;

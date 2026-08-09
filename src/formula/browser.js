@@ -100,6 +100,10 @@ class FormulaBrowser {
                         formulas: this._pendingFormulas.formulas,
                         theorems: this._pendingFormulas.theorems
                     });
+                } else if (!this._pendingFormulas && this._onRefresh) {
+                    // 重开窗口后内存无数据：打开 Tab 即自动触发一次刷新
+                    //（磁盘缓存命中时秒回），免去手动点 Refresh
+                    this._onRefresh();
                 }
                 // 重放缓存的 pending 消息
                 for (const msg of this._pendingMessages) {

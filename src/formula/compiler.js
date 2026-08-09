@@ -5,8 +5,38 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const vscode = require('vscode');
+
+/**
+ * 给 SVG 内所有 id 与引用加唯一前缀。
+ * dvisvgm --no-fonts 的字形以 <defs><path id='g0-101'> + <use xlink:href='#g0-101'>
+ * 组织；实测不同 DVI 产出的同名 id 指向不同字形（字体编号随加载顺序漂移），
+ * 而内嵌 SVG 的 id 在宿主文档内全局解析——不隔离时一个 SVG 会引用到另一个
+ * SVG 的 defs，字符显示成错误的字形。前缀取内容哈希，同内容同前缀、缓存稳定。
+ * @param {string} svg
+ * @param {string} prefix 须以字母开头（合法 XML id）
+ * @returns {string}
+ */
+function namespaceSvgIds(svg, prefix) {
+    if (!svg) return svg;
+    return svg
+        .replace(/id='([^']+)'/g, (m, id) => `id='${prefix}${id}'`)
+        .replace(/id="([^"]+)"/g, (m, id) => `id="${prefix}${id}"`)
+        .replace(/((?:xlink:)?href='#[^']*')/g, m => m.replace(/#/, `#${prefix}`))
+        .replace(/((?:xlink:)?href="#[^"]*")/g, m => m.replace(/#/, `#${prefix}`))
+        .replace(/url\(#([^)]+)\)/g, (m, id) => `url(#${prefix}${id})`);
+}
+
+/**
+ * SVG 内容短哈希（用于 id 前缀）。
+ * @param {string} content
+ * @returns {string}
+ */
+function svgHash(content) {
+    return 'g' + crypto.createHash('sha256').update(content).digest('hex').substring(0, 12) + '-';
+}
 
 /**
  * 检测可执行文件是否在 PATH 中。
@@ -100,6 +130,22 @@ function runLatex(texContent, workDir) {
 }
 
 /**
+ * 确保 SVG 根元素带显式 width/height（pt）。
+ * dvisvgm 3.x 部分场景只输出 viewBox，浏览器按默认 300px 渲染，
+ * 导致折叠一行预览的缩放行为不确定。补上 viewBox 对应的物理尺寸。
+ * @param {string} svg
+ * @returns {string}
+ */
+function ensureSvgSize(svg) {
+    if (!svg || /<svg[^>]*\swidth=/.test(svg)) return svg;
+    const vb = svg.match(/<svg[^>]*\sviewBox=['"]([^'"]+)['"]/);
+    if (!vb) return svg;
+    const parts = vb[1].trim().split(/[\s,]+/).map(Number);
+    if (parts.length !== 4 || parts.some(isNaN)) return svg;
+    return svg.replace(/<svg /, `<svg width='${parts[2]}pt' height='${parts[3]}pt' `);
+}
+
+/**
  * 将 DVI 逐页转为 SVG（使用 dvisvgm --no-fonts）。
  * @param {string} dviPath
  * @param {string} outputDir
@@ -111,10 +157,12 @@ function convertToSVG(dviPath, outputDir, pageCount) {
         const config = vscode.workspace.getConfiguration('latex-helper');
         const dvisvgmPath = config.get('dvisvgmPath', 'dvisvgm');
 
-        // 一次调用处理所有页：--page=1-N，用 %p 占位符输出到独立文件
+        // 一次调用处理所有页：--page=1-N，用 %p 占位符输出到独立文件。
+        // --no-fonts：文字转矢量路径。内嵌 woff2 字体子集会在多个 SVG 内嵌到同一
+        // 页面时因同名 @font-face 互相覆盖，重渲染后字符错成 Unicode 替代字形。
         const svgPattern = path.join(outputDir, 'page-%p.svg');
         const proc = spawn(dvisvgmPath, [
-            '--font-format=woff2',
+            '--no-fonts',
             '--zoom=-1',
             '--exact',
             '--page=1-' + pageCount,
@@ -150,7 +198,8 @@ function convertToSVG(dviPath, outputDir, pageCount) {
                 });
             const svgs = pageFiles.map(f => {
                 try {
-                    return fs.readFileSync(path.join(outputDir, f), 'utf-8');
+                    const raw = fs.readFileSync(path.join(outputDir, f), 'utf-8');
+                    return ensureSvgSize(namespaceSvgIds(raw, svgHash(raw)));
                 } catch {
                     return '';
                 }
@@ -204,4 +253,4 @@ async function compileFormulas(preamble, formulas) {
     }
 }
 
-module.exports = { checkTool, buildStandaloneDoc, compileFormulas };
+module.exports = { checkTool, buildStandaloneDoc, compileFormulas, ensureSvgSize, namespaceSvgIds, svgHash };
