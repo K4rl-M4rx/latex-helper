@@ -36,8 +36,11 @@ let currentTheorems = [];
 /** @type {boolean} */
 let onlyRef = true;
 
-/** @type {string} */
-let groupMode = 'section';
+/** @type {{formulas: string, theorems: string}} 各视图的分类方式（公式默认 section，定理默认 type；公式无 type 选项） */
+const viewGroupModes = { formulas: 'section', theorems: 'type' };
+
+/** @type {string} 公式浏览器当前视图（Group By 树跟随切换） */
+let activeView = 'formulas';
 
 /** @type {string} */
 let cacheDir = '';
@@ -107,23 +110,31 @@ function activate(context) {
         })
     );
 
-    // 原生 TreeView：分类方式选择（展开状态由 VS Code 记忆，不会自动收回）
+    // 原生 TreeView：分类方式选择（跟随浏览器当前视图，展开状态由 VS Code 记忆）
     const groupModeProvider = new GroupModeTreeProvider();
-    groupModeProvider.setMode(groupMode);
+    groupModeProvider.setMode(viewGroupModes[activeView]);
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('latex-helper.groupModeTree', groupModeProvider)
     );
     context.subscriptions.push(
         vscode.commands.registerCommand('latex-helper.setGroupMode', (mode) => {
-            if (typeof mode !== 'string' || mode === groupMode) return;
-            groupMode = mode;
+            // 只作用于当前视图；两个视图各自记忆自己的选择
+            if (typeof mode !== 'string' || mode === viewGroupModes[activeView]) return;
+            viewGroupModes[activeView] = mode;
             groupModeProvider.setMode(mode);
-            formulaBrowser.sendMessage({ type: 'groupMode', value: mode });
+            formulaBrowser.sendMessage({ type: 'groupMode', view: activeView, value: mode });
         })
     );
 
     // 公式浏览器（独立 Tab）
     formulaBrowser = new FormulaBrowser(context);
+    // 浏览器视图切换 → Group By 树跟随（选项集合 + 当前模式 ✓）
+    formulaBrowser._onActiveView = (view) => {
+        if (view !== 'formulas' && view !== 'theorems') return;
+        activeView = view;
+        groupModeProvider.setActiveView(view);
+        groupModeProvider.setMode(viewGroupModes[view]);
+    };
     formulaBrowser._onRefresh = async () => {
         const doc = await resolveRefreshDocument();
         if (doc) {

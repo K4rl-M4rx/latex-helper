@@ -28,8 +28,10 @@ class FormulaBrowser {
         this._pinnedLabels = context.workspaceState.get('latex-helper.pinnedFormulas', []);
         /** @type {boolean} 是否在浏览器中显示 Recently Used 分组，持久化到 workspaceState */
         this._showRecent = context.workspaceState.get('latex-helper.showRecentFormulas', true);
-        /** @type {string | null} 用户显式选择过的分类方式；null = 使用 webview 默认（公式 section / 定理 type） */
-        this._groupMode = null;
+        /** @type {{formulas: string | null, theorems: string | null}} 用户显式选择过的分类方式（按视图分开）；null = webview 默认 */
+        this._groupModes = { formulas: null, theorems: null };
+        /** @type {((view: string) => void) | null} 浏览器视图切换通知（extension.js 接线，Group By 树跟随） */
+        this._onActiveView = null;
     }
 
     /**
@@ -114,9 +116,11 @@ class FormulaBrowser {
                 this.panel.webview.postMessage({ type: 'recentFormulas', labels: this._recentLabels });
                 this.panel.webview.postMessage({ type: 'pinnedFormulas', labels: this._pinnedLabels });
                 this.panel.webview.postMessage({ type: 'showRecentFormulas', value: this._showRecent });
-                // 补发用户显式选择过的分类方式（未选择过则保持 webview 默认：公式 section / 定理 type）
-                if (this._groupMode) {
-                    this.panel.webview.postMessage({ type: 'groupMode', value: this._groupMode });
+                // 补发用户显式选择过的分类方式（按视图分开；未选择过则保持 webview 默认）
+                for (const view of ['formulas', 'theorems']) {
+                    if (this._groupModes[view]) {
+                        this.panel.webview.postMessage({ type: 'groupMode', view, value: this._groupModes[view] });
+                    }
                 }
                 readySent = true;
             } else if (message.type === 'refreshFormulas') {
@@ -130,6 +134,10 @@ class FormulaBrowser {
             } else if (message.type === 'compileTheorem') {
                 if (this._onCompileTheorem) {
                     this._onCompileTheorem(message.label);
+                }
+            } else if (message.type === 'activeView') {
+                if (this._onActiveView) {
+                    this._onActiveView(message.view);
                 }
             } else {
                 handlePanelMessage(message);
@@ -175,9 +183,10 @@ class FormulaBrowser {
      * @param {*} message
      */
     sendMessage(message) {
-        // 缓存显式选择的分类方式，供 Tab 重开 ready 时补发
+        // 缓存显式选择的分类方式（按视图分开），供 Tab 重开 ready 时补发
         if (message && message.type === 'groupMode') {
-            this._groupMode = message.value;
+            const view = message.view === 'theorems' ? 'theorems' : 'formulas';
+            this._groupModes[view] = message.value;
         }
         if (this.panel) {
             this.panel.webview.postMessage(message);

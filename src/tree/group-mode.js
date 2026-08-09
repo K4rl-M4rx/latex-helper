@@ -18,6 +18,8 @@ class GroupModeTreeProvider {
         this.onDidChangeTreeData = this._emitter.event;
         /** @type {string} 当前分类方式 */
         this.mode = 'section';
+        /** @type {string} 浏览器当前视图：formulas | theorems（Type 选项仅定理视图可用） */
+        this.activeView = 'formulas';
     }
 
     /**
@@ -27,6 +29,16 @@ class GroupModeTreeProvider {
     setMode(mode) {
         if (mode === this.mode) return;
         this.mode = mode;
+        this._emitter.fire();
+    }
+
+    /**
+     * 更新跟随的视图并刷新树（切换可选项集合）。
+     * @param {string} view
+     */
+    setActiveView(view) {
+        if (view === this.activeView) return;
+        this.activeView = view;
         this._emitter.fire();
     }
 
@@ -62,7 +74,11 @@ class GroupModeTreeProvider {
             return [{ kind: 'root' }];
         }
         if (element.kind === 'root') {
-            return GROUP_MODES.map(m => ({ kind: 'option', id: m.id, label: m.label }));
+            // 公式没有 Type 分类（envType 归组只对定理有意义），按当前视图过滤选项
+            const modes = this.activeView === 'theorems'
+                ? GROUP_MODES
+                : GROUP_MODES.filter(m => m.id !== 'type');
+            return modes.map(m => ({ kind: 'option', id: m.id, label: m.label }));
         }
         return [];
     }

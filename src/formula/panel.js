@@ -410,6 +410,8 @@ function getBrowserHtml(cspSource) {
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         vscode.postMessage({ type: 'ready' });
+        // 告知扩展端当前视图（Group By 树按视图区分：公式无 Type 选项）
+        vscode.postMessage({ type: 'activeView', view: 'formulas' });
         let currentFormulas = [];
         // 定理类环境条目，由扩展端解析推送（无需编译）
         let currentTheorems = [];
@@ -489,6 +491,8 @@ function getBrowserHtml(cspSource) {
                 btn.classList.add('active');
                 currentView = btn.dataset.view;
                 searchInput.placeholder = currentView === 'theorems' ? 'Search theorems...' : 'Search formulas...';
+                // 通知扩展端：Group By 树切换到对应视图的选项与当前模式
+                vscode.postMessage({ type: 'activeView', view: currentView });
                 render();
             });
         });
@@ -564,10 +568,19 @@ function getBrowserHtml(cspSource) {
                 case 'groupMode': {
                     const validModes = ['section', 'subsection', 'type'];
                     const newGroupMode = validModes.includes(msg.value) ? msg.value : 'section';
-                    // Group By 选择对公式和定理两个视图统一生效
-                    if (newGroupMode !== formulaGroupMode || newGroupMode !== theoremGroupMode) {
+                    // Group By 按视图生效：msg.view 指定目标视图（缺省视为两者，向后兼容）
+                    const targetFormulas = msg.view !== 'theorems';
+                    const targetTheorems = msg.view !== 'formulas';
+                    let changed = false;
+                    if (targetFormulas && newGroupMode !== formulaGroupMode) {
                         formulaGroupMode = newGroupMode;
+                        changed = true;
+                    }
+                    if (targetTheorems && newGroupMode !== theoremGroupMode) {
                         theoremGroupMode = newGroupMode;
+                        changed = true;
+                    }
+                    if (changed) {
                         // 仅在分类方式真正变化时重置：全部分组默认收缩
                         // （不能因重发相同值清掉用户手动的展开/收缩）
                         for (const k of Object.keys(collapsedGroups)) delete collapsedGroups[k];
