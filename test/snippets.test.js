@@ -20,8 +20,8 @@ Module._cache['vscode-stub'] = {
 
 const { getModeAtPosition } = require('../src/utils/tex');
 const { expandBody } = require('../src/snippets/provider');
-const { normalizeSnippets } = require('../src/snippets/config');
-const { computeFraction, buildSympyCommand, buildSympyScript } = require('../src/snippets/live-watcher');
+const { normalizeSnippets, parseSympyPrefix } = require('../src/snippets/config');
+const { computeFraction, parseSympyBlock, buildSympyScript } = require('../src/snippets/live-watcher');
 
 let passed = 0;
 let failed = 0;
@@ -159,17 +159,62 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
     check('按 priority 排序（首位）', out[0].prefix, 'c$');
 }
 
-console.log('== buildSympyCommand / buildSympyScript（SPECIAL_ACTION_SYMPY）==');
+console.log('== normalizeSnippets（SYMPY 模板交互字段）==');
 {
-    check('多项式 ^ → **', buildSympyCommand('x^2+2*x+1'), 'x**2+2*x+1');
-    check('\\sqrt{x} → sqrt(x)', buildSympyCommand('\\sqrt{x}'), 'sqrt(x)');
-    check('\\command 吃掉一个空格', buildSympyCommand('\\int x'), 'intx');
-    check('仅首个 ^ 被替换（与原插件一致）', buildSympyCommand('x^2^3'), 'x**2^3');
-    check('仅首对 {} 被替换（与原插件一致）', buildSympyCommand('{a}{b}'), '(a){b}');
-    const script = buildSympyScript('x**2+2*x+1');
-    check('脚本含 latex() 求值', script.includes('eval("latex(x**2+2*x+1)")'), true);
-    check('脚本预定义符号', script.includes("symbols('a b c x y z t')"), true);
-    check('命令内引号被 JSON 转义', buildSympyScript('a"b').includes('\\"'), true);
+    const out = normalizeSnippets([
+        { prefix: 'sympy ?(.+?) ?sympy ?$', body: 'SPECIAL_ACTION_SYMPY', triggerWhenComplete: true }
+    ]);
+    const s = out[0];
+    check('提取 sympyOpen', s.sympyOpen, 'sympy');
+    check('sympyOpenRegex 匹配行尾 sympy', s.sympyOpenRegex && s.sympyOpenRegex.test('x + sympy'), true);
+    check('sympyOpenRegex 不匹配表达式', s.sympyOpenRegex && s.sympyOpenRegex.test('sympy x^2'), false);
+    // 非 open ?(.+?) ?close ?$ 形态的 SYMPY prefix：sympyOpen 为 null，回退旧行为
+    const legacy = normalizeSnippets([
+        { prefix: 'h$', body: 'SPECIAL_ACTION_SYMPY', triggerWhenComplete: true }
+    ])[0];
+    check('不可解析形态 → sympyOpen null', legacy.sympyOpen, null);
+}
+
+console.log('== parseSympyPrefix（SYMPY 模板交互的 prefix 解析）==');
+{
+    const p = parseSympyPrefix('sympy ?(.+?) ?sympy ?$');
+    check('用户形态提取 open', p && p.open, 'sympy');
+    check('用户形态提取 close', p && p.close, 'sympy');
+    const p2 = parseSympyPrefix('calc (.+?) end$');
+    check('变体 open', p2 && p2.open, 'calc');
+    check('变体 close', p2 && p2.close, 'end');
+    check('无捕获组 → null', parseSympyPrefix('h$'), null);
+    check('无收尾词 → null', parseSympyPrefix('sympy (.+?)$'), null);
+}
+
+console.log('== parseSympyBlock / buildSympyScript（SPECIAL_ACTION_SYMPY 表达式内传参）==');
+{
+    const s = JSON.stringify;
+    check('默认 evaluate', s(parseSympyBlock('x^2+2x+1')),
+        s({ expr: 'x^2+2x+1', op: 'evaluate', arg: null }));
+    check('collect 带变量', s(parseSympyBlock('x*y+x^2 collect x')),
+        s({ expr: 'x*y+x^2', op: 'collect', arg: 'x' }));
+    check('factor', s(parseSympyBlock('x^2+2x+1 factor')),
+        s({ expr: 'x^2+2x+1', op: 'factor', arg: null }));
+    check('expand', s(parseSympyBlock('(x+1)^2 expand')),
+        s({ expr: '(x+1)^2', op: 'expand', arg: null }));
+    check('numerical', s(parseSympyBlock('1/3 numerical')),
+        s({ expr: '1/3', op: 'numerical', arg: null }));
+    check('solve 含 =', s(parseSympyBlock('x^2=4 solve')),
+        s({ expr: 'x^2=4', op: 'solve', arg: null }));
+    check('显式 evaluate 词', s(parseSympyBlock('x+1 evaluate')),
+        s({ expr: 'x+1', op: 'evaluate', arg: null }));
+}
+{
+    const s = buildSympyScript('x*y+x^2', 'collect', 'x', new Map());
+    check('collect: latex2sympy2 __parse', s.includes('__parse('), true);
+    check('collect: collect(__expr, Symbol("x"))', s.includes('collect(__expr, Symbol("x"))'), true);
+    check('collect: prelude 预定义符号', s.includes("symbols('a b c x y z t')"), true);
+    check('factor 包裹', buildSympyScript('x^2+1', 'factor', null, new Map()).includes('latex(factor(__expr))'), true);
+    check('numerical N(...,15)', buildSympyScript('\\pi', 'numerical', null, new Map()).includes('latex(N(__expr, 15))'), true);
+    check('solve 含 = 走 Eq', buildSympyScript('x^2=4', 'solve', null, new Map()).includes('solve(Eq(__lhs, __rhs))'), true);
+    check('solve 无 = 求零点', buildSympyScript('x^2-1', 'solve', null, new Map()).includes('latex(solve(__expr))'), true);
+    check('表达式 JSON 注入', buildSympyScript('a"b', 'evaluate', null, new Map()).includes('\\"'), true);
 }
 
 console.log('== computeFraction（SPECIAL_ACTION_FRACTION，对齐原插件 getFraction）==');

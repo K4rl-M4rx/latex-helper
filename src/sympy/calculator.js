@@ -114,6 +114,19 @@ function buildEvalAtScript(exprLatex, varName, valueLatex, vars) {
 }
 
 /**
+ * collect 脚本：按指定符号的幂次整理表达式（对应 Wolfram Collect[expr, x]）。
+ * @param {string} latexExpr
+ * @param {string} varName 收集变量（默认 'x'）
+ * @param {Map<string, string>} vars
+ * @returns {string}
+ */
+function buildCollectScript(latexExpr, varName, vars) {
+    return buildPrelude(vars) +
+        '__expr = __parse(' + JSON.stringify(latexExpr) + ')\n' +
+        'print(latex(collect(__expr, Symbol(' + JSON.stringify(varName) + '))), end=\'\')';
+}
+
+/**
  * 解析 eval-at 选区文本：`expr|_{var = value}`（外层括号可有可无）。
  * 取最后一个 |_{ ，允许 expr 内部出现 }（如 \frac{...}{...}）。
  * @param {string} text
@@ -128,6 +141,19 @@ function parseEvalAt(text) {
         expr = expr.slice(1, -1);
     }
     return { expr, varName: m[2], value: m[3].trim() };
+}
+
+/**
+ * 解析 collect 选区文本：`expr`（默认按 x 收集）或 `expr collect var`。
+ * 取最后一个 "collect" 作为分隔（expr 内部允许出现该词）。
+ * @param {string} text
+ * @returns {{ expr: string, varName: string }}
+ */
+function parseCollect(text) {
+    const t = text.trim();
+    const m = /^(.*)\s+collect\s+([A-Za-z_]\w*)$/s.exec(t);
+    if (!m) return { expr: t, varName: 'x' };
+    return { expr: m[1].trim(), varName: m[2] };
 }
 
 /** @param {string} name */
@@ -248,6 +274,30 @@ class SympyCalculator {
         }
     }
 
+    /** collect 命令：选区为表达式（默认按 x 收集）或 `expr collect 变量`，结果追加在选区后 */
+    async collectCommand() {
+        const sel = this.getSelection();
+        if (!sel) return;
+        const { expr, varName } = parseCollect(sel.text);
+        if (!expr) {
+            vscode.window.showWarningMessage('LaTeX Helper: collect 选区为空');
+            return;
+        }
+        if (!isValidVarName(varName)) {
+            vscode.window.showWarningMessage('LaTeX Helper: 非法收集变量 ' + varName);
+            return;
+        }
+        try {
+            const result = await this.runPython(buildCollectScript(expr, varName, this.vars));
+            if (!result) throw new Error('sympy returned empty output');
+            await sel.editor.edit(editBuilder => {
+                editBuilder.insert(sel.selection.end, ' = ' + result);
+            });
+        } catch (err) {
+            this.showError(err);
+        }
+    }
+
     /** define 命令：选区形如 `name = <latex 表达式>`，存入变量表（不改动文档） */
     async defineCommand() {
         const sel = this.getSelection();
@@ -312,6 +362,7 @@ function registerSympyCommands(context) {
     bind('sympyFactor', () => calc.evaluateCommand('factor'));
     bind('sympyExpand', () => calc.evaluateCommand('expand'));
     bind('sympyNumerical', () => calc.evaluateCommand('numerical'));
+    bind('sympyCollect', () => calc.collectCommand());
     bind('sympySolve', () => calc.solveCommand());
     bind('sympyEvalAt', () => calc.evalAtCommand());
     bind('sympyDefine', () => calc.defineCommand());
@@ -326,7 +377,9 @@ module.exports = {
     buildEvalScript,
     buildSolveScript,
     buildEvalAtScript,
+    buildCollectScript,
     parseEvalAt,
+    parseCollect,
     isValidVarName,
     PARSE_FN_SRC,
     VARS_STATE_KEY

@@ -45,10 +45,13 @@ const RM_SNIPPET = {
     triggerWhenComplete: true
 };
 
+/** 各场景可替换的 snippet 配置（live-watcher 每次从配置读取） */
+let testSnippets = [RM_SNIPPET];
+
 const vscodeStub = {
     Position, Range, Selection, SnippetString,
     workspace: {
-        getConfiguration: () => ({ get: () => [RM_SNIPPET] })
+        getConfiguration: () => ({ get: () => testSnippets })
     },
     window: { activeTextEditor: null },
     languages: {}
@@ -155,6 +158,51 @@ async function main() {
             text: 'm'
         }]));
         check('覆盖输入：仍触发', editor.insertedSnippets.length === 1);
+    }
+
+    // 场景 4：SYMPY 模板触发——行尾输入开头词 sympy → 插入 "sympy $1" 模板
+    //（tabstop 光标停在表达式处；用户输完表达式再输入收尾 sympy 才求值）
+    {
+        testSnippets = [{
+            prefix: 'sympy ?(.+?) ?sympy ?$',
+            body: 'SPECIAL_ACTION_SYMPY',
+            mode: 'maths',
+            description: 'sympy',
+            triggerWhenComplete: true,
+            priority: 3
+        }];
+        const editor = makeEditor(['\\( x + sympy']);
+        vscodeStub.window.activeTextEditor = editor;
+        const watcher = new LiveSnippetWatcher();
+        await watcher.watcher(changeEvent(editor.document, [{
+            range: new Range(0, 12, 0, 12), // 输入了最后一个 y
+            text: 'y'
+        }]));
+        check('SYMPY 模板：删除开头词范围',
+            editor.edits.length === 1 && editor.edits[0].kind === 'delete');
+        check('SYMPY 模板：插入 "sympy $1"',
+            editor.insertedSnippets.length === 1 && editor.insertedSnippets[0] === 'sympy $1');
+    }
+
+    // 场景 5：SYMPY 模板不误触发——开头词后面已有表达式（行尾不是开头词）
+    {
+        testSnippets = [{
+            prefix: 'sympy ?(.+?) ?sympy ?$',
+            body: 'SPECIAL_ACTION_SYMPY',
+            mode: 'maths',
+            description: 'sympy',
+            triggerWhenComplete: true,
+            priority: 3
+        }];
+        const editor = makeEditor(['\\( sympy x^2']);
+        vscodeStub.window.activeTextEditor = editor;
+        const watcher = new LiveSnippetWatcher();
+        await watcher.watcher(changeEvent(editor.document, [{
+            range: new Range(0, 12, 0, 12), // 输入表达式最后一个字符 2
+            text: '2'
+        }]));
+        check('SYMPY 非完整块：不产生编辑', editor.edits.length === 0);
+        check('SYMPY 非完整块：不插入模板', editor.insertedSnippets.length === 0);
     }
 
     console.log(`\n${passed} passed, ${failed} failed`);

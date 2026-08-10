@@ -15,6 +15,7 @@ const { getLiveSnippets } = require('./config');
 const { getModeAtPosition } = require('../utils/tex');
 const { getPythonPath } = require('../utils/python');
 const { expandBody } = require('./provider');
+const { buildPrelude } = require('../sympy/calculator');
 
 /** sympy 求值占位符：匹配后先同步插入，异步替换为 sympy 的 LaTeX 输出 */
 const SYMPY_PLACEHOLDER = 'SYMPY_CALCULATING';
@@ -22,33 +23,57 @@ const SYMPY_PLACEHOLDER = 'SYMPY_CALCULATING';
 const SYMPY_ERROR = 'SYMPY_ERROR';
 
 /**
- * 捕获组表达式 → sympy 可求值形式（1:1 原插件转换规则）：
- * \command + 可选空格 → command；^ → **；{ → (；} → )（后三项仅替换首个，与原插件一致）
- * @param {string} expr
- * @returns {string}
+ * 解析 SYMPY 块内表达式与可选操作词（表达式里直接传参）：
+ * - `expr`                          → evaluate（默认）
+ * - `expr collect <var>`            → 按指定变量收集（对应 Wolfram Collect）
+ * - `expr factor | expand | numerical | solve | evaluate` → 对应操作
+ * @param {string} block 完整块捕获组 1（如 "x^2+2x+1 collect x"）
+ * @returns {{ expr: string, op: string, arg: string | null }}
  */
-function buildSympyCommand(expr) {
-    return expr
-        .replace(/\\(\w+) ?/g, '$1')
-        .replace(/\^/, '**')
-        .replace('{', '(')
-        .replace('}', ')');
+function parseSympyBlock(block) {
+    let m = /^(.*?)\s+collect\s+([A-Za-z_]\w*)$/s.exec(block);
+    if (m) return { expr: m[1].trim(), op: 'collect', arg: m[2] };
+    m = /^(.*?)\s+(factor|expand|numerical|solve|evaluate)$/s.exec(block);
+    if (m) return { expr: m[1].trim(), op: m[2], arg: null };
+    return { expr: block.trim(), op: 'evaluate', arg: null };
 }
 
 /**
- * 生成 python3 -c 脚本（符号预定义与原插件一致）。
- * eval 参数用 JSON 字符串字面量注入，避免命令内引号破坏脚本（比原插件 shell 拼接更安全）。
- * @param {string} command
+ * 生成 python3 -c 脚本：复用快捷键计算器的 latex2sympy2 管道
+ * （buildPrelude + __parse，支持 \frac 等完整 LaTeX 语法；操作语义与快捷键命令一致）。
+ * - solve：表达式含 = 按方程求解（Eq），否则求零点
+ * - 所有用户输入经 JSON.stringify 注入，杜绝注入
+ * @param {string} latexExpr
+ * @param {string} op
+ * @param {string | null} arg
+ * @param {Map<string, string>} vars 变量表（live-watcher 无变量表，传空 Map）
  * @returns {string}
  */
-function buildSympyScript(command) {
-    return 'from sympy import *\n' +
-        'import re\n' +
-        "a, b, c, x, y, z, t = symbols('a b c x y z t')\n" +
-        "k, m, n = symbols('k m n', integer=True)\n" +
-        "f, g, h = symbols('f g h', cls=Function)\n" +
-        'init_printing()\n' +
-        'print(eval(' + JSON.stringify('latex(' + command + ')') + "), end='')";
+function buildSympyScript(latexExpr, op, arg, vars) {
+    const prelude = buildPrelude(vars);
+    if (op === 'solve') {
+        const eqIdx = latexExpr.indexOf('=');
+        if (eqIdx !== -1) {
+            const lhs = latexExpr.slice(0, eqIdx).trim();
+            const rhs = latexExpr.slice(eqIdx + 1).trim();
+            return prelude +
+                '__lhs = __parse(' + JSON.stringify(lhs) + ')\n' +
+                '__rhs = __parse(' + JSON.stringify(rhs) + ')\n' +
+                'print(latex(solve(Eq(__lhs, __rhs))), end=\'\')';
+        }
+    }
+    let apply = '__expr';
+    if (op === 'factor') apply = 'factor(__expr)';
+    else if (op === 'expand') apply = 'expand(__expr)';
+    else if (op === 'numerical') apply = 'N(__expr, 15)';
+    else if (op === 'collect') apply = 'collect(__expr, Symbol(' + JSON.stringify(arg) + '))';
+    else if (op === 'solve') apply = 'solve(__expr)';
+    return prelude +
+        '__expr = __parse(' + JSON.stringify(latexExpr) + ')\n' +
+        // latex2sympy2 把 \frac{d}{dx}、\int 解析为未求值的 Derivative/Integral，
+        // evaluate 语义要求算出结果；doit 对普通表达式是恒等，安全
+        "__expr = __expr.doit() if hasattr(__expr, 'doit') else __expr\n" +
+        'print(latex(' + apply + "), end='')";
 }
 
 /**
@@ -173,7 +198,19 @@ class LiveSnippetWatcher {
         if (!editor) return undefined;
 
         const upto = change.range.start.character + change.text.length + offset;
-        const match = snippet.prefixRegex.exec(line.text.substring(0, upto));
+        const text = line.text.substring(0, upto);
+        let match = snippet.prefixRegex.exec(text);
+        // SYMPY 模板交互：完整块未匹配时，尝试行尾的开头词（如 "sympy" 在行尾）。
+        // 命中则插入 "open $1" 模板（tabstop 光标停在表达式处），用户输完表达式
+        // 再输入收尾词，完整块正则匹配后走下方占位符求值路径。
+        let isTemplateTrigger = false;
+        if (!match && snippet.specialAction === 'sympy' && snippet.sympyOpenRegex) {
+            const openMatch = snippet.sympyOpenRegex.exec(text);
+            if (openMatch) {
+                match = openMatch;
+                isTemplateTrigger = true;
+            }
+        }
         if (!match) return undefined;
 
         // SPECIAL_ACTION_BREAK：熔断哨兵（无文本替换）
@@ -181,6 +218,28 @@ class LiveSnippetWatcher {
 
         // SPECIAL_ACTION_SYMPY：先把匹配文本替换为占位符，异步求值后替换为结果
         if (snippet.specialAction === 'sympy') {
+            if (isTemplateTrigger) {
+                // 模板触发：把行尾的开头词替换为 "open $1"，光标停在 tabstop 输入表达式。
+                // 不包含收尾词——用户输完表达式后自行输入收尾词才触发求值（掌控时机）
+                const openRange = new vscode.Range(
+                    new vscode.Position(line.lineNumber, match.index),
+                    new vscode.Position(line.lineNumber, match.index + match[0].length)
+                );
+                this.isApplyingEdit = true;
+                try {
+                    await editor.edit(editBuilder => {
+                        editBuilder.delete(openRange);
+                    }, { undoStopBefore: true, undoStopAfter: false });
+                    await editor.insertSnippet(
+                        new vscode.SnippetString(snippet.sympyOpen + ' $1'),
+                        undefined,
+                        { undoStopBefore: true, undoStopAfter: true }
+                    );
+                    return (snippet.sympyOpen + ' ').length - match[0].length;
+                } finally {
+                    this.isApplyingEdit = false;
+                }
+            }
             const sympyRange = new vscode.Range(
                 new vscode.Position(line.lineNumber, match.index),
                 new vscode.Position(line.lineNumber, match.index + match[0].length)
@@ -269,11 +328,17 @@ class LiveSnippetWatcher {
      * @returns {string} 占位符文本
      */
     execSympy(match) {
-        const command = buildSympyCommand(match[1]);
-        const script = buildSympyScript(command);
+        const block = match[1];
+        const parsed = parseSympyBlock(block);
+        if (!parsed.expr) {
+            // 空表达式（如 "sympy collect x sympy"）：不调 python，走错误路径清理占位符
+            this.applySympyResult(block, new Error('empty expression'), '', '');
+            return SYMPY_PLACEHOLDER;
+        }
+        const script = buildSympyScript(parsed.expr, parsed.op, parsed.arg, new Map());
         const pythonPath = getPythonPath();
         execFile(pythonPath, ['-c', script], { timeout: 15000 }, (err, stdout, stderr) => {
-            this.applySympyResult(command, err, stdout, stderr);
+            this.applySympyResult(block, err, stdout, stderr);
         });
         return SYMPY_PLACEHOLDER;
     }
@@ -341,7 +406,7 @@ class LiveSnippetWatcher {
 module.exports = {
     LiveSnippetWatcher,
     computeFraction,
-    buildSympyCommand,
+    parseSympyBlock,
     buildSympyScript,
     SYMPY_PLACEHOLDER,
     SYMPY_ERROR

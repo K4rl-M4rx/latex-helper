@@ -23,7 +23,9 @@ const {
     buildEvalScript,
     buildSolveScript,
     buildEvalAtScript,
+    buildCollectScript,
     parseEvalAt,
+    parseCollect,
     isValidVarName
 } = require('../src/sympy/calculator');
 
@@ -114,6 +116,21 @@ eqObj('parseEvalAt: 非法变量名返回 null', parseEvalAt('x+2|_{1 = 3}'), nu
     const s = buildEvalAtScript('x+2', 'x', '3', new Map());
     ok('evalAt: subs 调用', s.includes("__expr.subs(Symbol(\"x\"), __val)"));
     ok('evalAt: 值注入', s.includes('__val = __parse("3")'));
+}
+
+// ---- parseCollect / buildCollectScript ----
+{
+    eqObj('parseCollect: 无 collect → 默认按 x', parseCollect('x*y+x^2+z'), { expr: 'x*y+x^2+z', varName: 'x' });
+    eqObj('parseCollect: 指定变量', parseCollect('x*y+x^2+z collect y'), { expr: 'x*y+x^2+z', varName: 'y' });
+    eqObj('parseCollect: 含空格 trim', parseCollect('  x+1  collect  z  '), { expr: 'x+1', varName: 'z' });
+    eqObj('parseCollect: expr 含 collect 词取最后一个', parseCollect('collect+1 collect y'), { expr: 'collect+1', varName: 'y' });
+}
+{
+    const s = buildCollectScript('x*y+x^2', 'y', new Map());
+    ok('collect: 调 collect 函数', s.includes('collect(__expr, Symbol('));
+    ok('collect: 变量注入', s.includes('Symbol("y")'));
+    ok('collect: 表达式注入', s.includes('__expr = __parse("x*y+x^2")'));
+    ok('collect: 输出 latex', s.includes("print(latex(collect(__expr, Symbol("));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
