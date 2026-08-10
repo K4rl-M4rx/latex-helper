@@ -154,6 +154,17 @@
           "default": "python3",
           "description": "Path to python3 with sympy installed (e.g. ~/.local/pipx/venvs/sympy/bin/python3 for pipx installs)"
         },
+        "latex-helper.casBackend": {
+          "type": "string",
+          "enum": ["sympy", "wolfram"],
+          "default": "sympy",
+          "description": "sympy ... sympy 块（∴ ... ∴c）的求值引擎：sympy（latex2sympy2 管道）或 wolfram（wolframscript TeXForm）"
+        },
+        "latex-helper.wolframPath": {
+          "type": "string",
+          "default": "wolframscript",
+          "description": "Path to wolframscript executable (Wolfram Engine)"
+        },
         "latex-helper.auxPath": {
           "type": "string",
           "default": "./temp",

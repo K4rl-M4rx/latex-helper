@@ -15,39 +15,6 @@ const SPECIAL_ACTIONS = {
     SPECIAL_ACTION_SYMPY: 'sympy'
 };
 
-/**
- * 转义正则元字符（用于把字面触发词编译进正则）。
- * @param {string} str
- * @returns {string}
- */
-function escapeRegex(str) {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * 解析 SPECIAL_ACTION_SYMPY 的 prefix，期望形态：open ?(.+?) ?close ?$
- * （open/close 为字面触发词，中间一个捕获组承载表达式）。
- * 提取模板交互所需的开头词（行尾输入它 → 插入 "open $1" 模板）与
- * 收尾词（输入它 → 完整块匹配 → 求值）。无法提取（如无捕获组的
- * 简单正则）返回 null，回退"即输即算"旧行为。
- *
- * 注意：prefix 是正则源文本，" ?" 在源文本里是"空格+问号"两个字符
- * （编译后为"可选空格"量词），解析时必须按字面匹配（\?），
- * 触发词用 \S+? 提取以避免吞掉两侧的可选空格。
- * @param {string} prefix
- * @returns {{ open: string, close: string } | null}
- */
-function parseSympyPrefix(prefix) {
-    // 捕获组前/后的可选空格量词可能是 " ?"（空格+问号）或 " "（单空格），
-    // 用 \?? 兼容两者；触发词用 \S+? 提取避免吞掉空格。
-    // close 必须是字面词（无 $ ? ( ) 等正则构造），否则视为不可解析回退旧行为
-    const m = /^(\S+?)(?: \??(?:\(\.\+\?\)|\(\.\*?\?\)))(?: \??)?(\S+?)(?: \??)?\$?$/.exec(prefix);
-    if (!m || !m[1] || !m[2]) return null;
-    const close = m[2];
-    if (!/^[A-Za-z0-9\\]+$/.test(close)) return null;
-    return { open: m[1], close };
-}
-
 /** @type {{ snippets: Array<NormalizedSnippet>, raw: string, age: number } | null} */
 let cache = null;
 
@@ -97,8 +64,6 @@ function getCompletionSnippets() {
  * @property {number} priority
  * @property {boolean} noPlaceholders
  * @property {'fraction'|'break'|'sympy'|undefined} specialAction SPECIAL_ACTION 动作类型
- * @property {string|null} sympyOpen SYMPY 模板交互的开头触发词（parseSympyPrefix 提取，失败为 null）
- * @property {RegExp|null} sympyOpenRegex 行尾匹配开头词的正则（"open ?$"）
  */
 
 /**
@@ -156,19 +121,6 @@ function normalizeSnippets(raw) {
 
         const description = typeof s.description === 'string' ? s.description : '';
 
-        // SYMPY 模板交互：prefix 形如 "open ?(.+?) ?close ?$" 时提取触发词，
-        // live-watcher 据此在行尾输入 open 时插入 "open $1" 模板（tabstop 输表达式），
-        // 输入 close 后完整块匹配再求值；提取失败保持旧"即输即算"行为
-        let sympyOpen = null;
-        let sympyOpenRegex = null;
-        if (specialAction === 'sympy') {
-            const parsed = parseSympyPrefix(prefix);
-            if (parsed) {
-                sympyOpen = parsed.open;
-                sympyOpenRegex = new RegExp(escapeRegex(parsed.open) + ' ?$');
-            }
-        }
-
         result.push({
             prefix,
             prefixRegex,
@@ -178,9 +130,7 @@ function normalizeSnippets(raw) {
             triggerWhenComplete,
             priority,
             noPlaceholders,
-            specialAction,
-            sympyOpen,
-            sympyOpenRegex
+            specialAction
         });
     }
 
@@ -193,6 +143,5 @@ module.exports = {
     getSnippets,
     getLiveSnippets,
     getCompletionSnippets,
-    normalizeSnippets,
-    parseSympyPrefix
+    normalizeSnippets
 };

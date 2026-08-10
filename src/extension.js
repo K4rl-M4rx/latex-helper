@@ -14,6 +14,7 @@ const { GroupModeTreeProvider } = require('./tree/group-mode');
 const { importSnippets } = require('./snippets/importer');
 const { registerSnippetProvider } = require('./snippets/provider');
 const { LiveSnippetWatcher } = require('./snippets/live-watcher');
+const { registerSympyBlockCompletion } = require('./snippets/sympy-completion');
 const { registerSympyCommands } = require('./sympy/calculator');
 
 /** @type {FormulaPanelProvider} */
@@ -171,6 +172,9 @@ function activate(context) {
             liveWatcher.watcher(event);
         })
     );
+
+    // ∴ 块补全：命令词 + 表达式结构模板建议
+    context.subscriptions.push(registerSympyBlockCompletion());
 
     // SymPy 计算器：选中表达式 + 快捷键求值（移植 latex-sympy-calculator 交互）
     registerSympyCommands(context);

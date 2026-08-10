@@ -10,12 +10,14 @@
  */
 
 const vscode = require('vscode');
+const os = require('os');
 const { execFile } = require('child_process');
 const { getLiveSnippets } = require('./config');
 const { getModeAtPosition } = require('../utils/tex');
 const { getPythonPath } = require('../utils/python');
 const { expandBody } = require('./provider');
 const { buildPrelude } = require('../sympy/calculator');
+const { tex2wolfram } = require('./tex2wolfram');
 
 /** sympy 求值占位符：匹配后先同步插入，异步替换为 sympy 的 LaTeX 输出 */
 const SYMPY_PLACEHOLDER = 'SYMPY_CALCULATING';
@@ -36,6 +38,54 @@ function parseSympyBlock(block) {
     m = /^(.*?)\s+(factor|expand|numerical|solve|evaluate)$/s.exec(block);
     if (m) return { expr: m[1].trim(), op: m[2], arg: null };
     return { expr: block.trim(), op: 'evaluate', arg: null };
+}
+
+/**
+ * 操作词 → sympy 函数包裹（collect/solve/evaluate 特殊处理，其余查表）。
+ * fullsimplify 无直接对应 → simplify；trigreduce → trigsimp；trigexpand → expand_trig。
+ */
+const SYMPY_OP_FN = {
+    expand: 'expand(__expr)',
+    factor: 'factor(__expr)',
+    simplify: 'simplify(__expr)',
+    fullsimplify: 'simplify(__expr)',
+    together: 'together(__expr)',
+    apart: 'apart(__expr)',
+    cancel: 'cancel(__expr)',
+    trigreduce: 'trigsimp(__expr)',
+    trigexpand: 'expand_trig(__expr)',
+    powerexpand: 'powsimp(__expr)',
+    numerical: 'N(__expr, 15)'
+};
+
+/**
+ * 操作词 → Wolfram 函数名（collect/solve/evaluate 特殊处理，其余查表）。
+ */
+const WOLFRAM_OP_FN = {
+    expand: 'Expand',
+    factor: 'Factor',
+    simplify: 'Simplify',
+    fullsimplify: 'FullSimplify',
+    together: 'Together',
+    apart: 'Apart',
+    cancel: 'Cancel',
+    trigreduce: 'TrigReduce',
+    trigexpand: 'TrigExpand',
+    powerexpand: 'PowerExpand',
+    numerical: 'N'
+};
+
+/**
+ * 解析 prefix 正则捕获的操作词（组 2）：
+ * - "collect x" → { op: 'collect', arg: 'x' }
+ * - "expand" → { op: 'expand', arg: null }
+ * @param {string} opRaw
+ * @returns {{ op: string, arg: string | null }}
+ */
+function parseOpWord(opRaw) {
+    const m = /^collect\s+([A-Za-z_]\w*)$/.exec(opRaw);
+    if (m) return { op: 'collect', arg: m[1] };
+    return { op: opRaw, arg: null };
 }
 
 /**
@@ -63,17 +113,64 @@ function buildSympyScript(latexExpr, op, arg, vars) {
         }
     }
     let apply = '__expr';
-    if (op === 'factor') apply = 'factor(__expr)';
-    else if (op === 'expand') apply = 'expand(__expr)';
-    else if (op === 'numerical') apply = 'N(__expr, 15)';
-    else if (op === 'collect') apply = 'collect(__expr, Symbol(' + JSON.stringify(arg) + '))';
-    else if (op === 'solve') apply = 'solve(__expr)';
+    if (op === 'collect') {
+        apply = 'collect(__expr, Symbol(' + JSON.stringify(arg) + '))';
+    } else if (SYMPY_OP_FN[op]) {
+        apply = SYMPY_OP_FN[op];
+    } else if (op === 'solve') {
+        apply = 'solve(__expr)';
+    }
     return prelude +
         '__expr = __parse(' + JSON.stringify(latexExpr) + ')\n' +
         // latex2sympy2 把 \frac{d}{dx}、\int 解析为未求值的 Derivative/Integral，
         // evaluate 语义要求算出结果；doit 对普通表达式是恒等，安全
         "__expr = __expr.doit() if hasattr(__expr, 'doit') else __expr\n" +
         'print(latex(' + apply + "), end='')";
+}
+
+/**
+ * 生成 wolframscript 命令：ToString[expr, TeXForm] 输出 LaTeX。
+ * - 注意：不能直接 TeXForm[...]——WolframScript 1.13 下 TeXForm 不作为
+ *   函数求值（`TeXForm[x^2]` 原样返回），必须用 ToString[expr, TeXForm]。
+ * - evaluate（命令词显式给出）：ToString[expr, TeXForm]，expr 为 Wolfram 表达式
+ * - 代数操作词：ToString[Fn[expr], TeXForm] 等；collect → Collect[expr, var]；solve → Solve[expr == 0]
+ * - 带参形式 fnName[fnArgs]：expr 作为第一参数 → ToString[Fn[expr, fnArgs], TeXForm]
+ * @param {string} expr Wolfram 表达式
+ * @param {string} op
+ * @param {string | null} arg
+ * @param {string | null} fnName 带参形式的 Wolfram 函数名（fn[args] 语法）
+ * @param {string | null} fnArgs 带参形式的参数（Wolfram 语法，原样透传）
+ * @returns {string}
+ */
+function buildWolframScript(expr, op, arg, fnName, fnArgs) {
+    if (fnName) {
+        const suffix = fnArgs ? ', ' + fnArgs : '';
+        return 'ToString[' + fnName + '[' + expr + suffix + '], TeXForm]';
+    }
+    if (op === 'collect') return 'ToString[Collect[' + expr + ', ' + arg + '], TeXForm]';
+    if (op === 'solve') {
+        // 用户输入 LaTeX 风格单个 = 时转成 Wolfram 的 ==（x^2=4 → x^2==4），
+        // 已有 ==/<=/>=/!= 不受影响；无等号才补 == 0
+        const eq = expr.replace(/([^<>=!])=(?!=)/g, '$1==');
+        return eq.includes('==')
+            ? 'ToString[Solve[' + eq + '], TeXForm]'
+            : 'ToString[Solve[' + eq + ' == 0], TeXForm]';
+    }
+    const fn = WOLFRAM_OP_FN[op];
+    if (fn) return 'ToString[' + fn + '[' + expr + '], TeXForm]';
+    return 'ToString[' + expr + ', TeXForm]';
+}
+
+/**
+ * 读取 latex-helper.wolframPath 配置并展开开头的 ~/（默认 wolframscript，在 PATH 中）。
+ * @returns {string}
+ */
+function getWolframPath() {
+    let wolframPath = vscode.workspace.getConfiguration('latex-helper').get('wolframPath', 'wolframscript');
+    if (wolframPath.startsWith('~/')) {
+        wolframPath = os.homedir() + wolframPath.slice(1);
+    }
+    return wolframPath;
 }
 
 /**
@@ -198,19 +295,7 @@ class LiveSnippetWatcher {
         if (!editor) return undefined;
 
         const upto = change.range.start.character + change.text.length + offset;
-        const text = line.text.substring(0, upto);
-        let match = snippet.prefixRegex.exec(text);
-        // SYMPY 模板交互：完整块未匹配时，尝试行尾的开头词（如 "sympy" 在行尾）。
-        // 命中则插入 "open $1" 模板（tabstop 光标停在表达式处），用户输完表达式
-        // 再输入收尾词，完整块正则匹配后走下方占位符求值路径。
-        let isTemplateTrigger = false;
-        if (!match && snippet.specialAction === 'sympy' && snippet.sympyOpenRegex) {
-            const openMatch = snippet.sympyOpenRegex.exec(text);
-            if (openMatch) {
-                match = openMatch;
-                isTemplateTrigger = true;
-            }
-        }
+        const match = snippet.prefixRegex.exec(line.text.substring(0, upto));
         if (!match) return undefined;
 
         // SPECIAL_ACTION_BREAK：熔断哨兵（无文本替换）
@@ -218,28 +303,6 @@ class LiveSnippetWatcher {
 
         // SPECIAL_ACTION_SYMPY：先把匹配文本替换为占位符，异步求值后替换为结果
         if (snippet.specialAction === 'sympy') {
-            if (isTemplateTrigger) {
-                // 模板触发：把行尾的开头词替换为 "open $1"，光标停在 tabstop 输入表达式。
-                // 不包含收尾词——用户输完表达式后自行输入收尾词才触发求值（掌控时机）
-                const openRange = new vscode.Range(
-                    new vscode.Position(line.lineNumber, match.index),
-                    new vscode.Position(line.lineNumber, match.index + match[0].length)
-                );
-                this.isApplyingEdit = true;
-                try {
-                    await editor.edit(editBuilder => {
-                        editBuilder.delete(openRange);
-                    }, { undoStopBefore: true, undoStopAfter: false });
-                    await editor.insertSnippet(
-                        new vscode.SnippetString(snippet.sympyOpen + ' $1'),
-                        undefined,
-                        { undoStopBefore: true, undoStopAfter: true }
-                    );
-                    return (snippet.sympyOpen + ' ').length - match[0].length;
-                } finally {
-                    this.isApplyingEdit = false;
-                }
-            }
             const sympyRange = new vscode.Range(
                 new vscode.Position(line.lineNumber, match.index),
                 new vscode.Position(line.lineNumber, match.index + match[0].length)
@@ -328,17 +391,52 @@ class LiveSnippetWatcher {
      * @returns {string} 占位符文本
      */
     execSympy(match) {
-        const block = match[1];
-        const parsed = parseSympyBlock(block);
-        if (!parsed.expr) {
-            // 空表达式（如 "sympy collect x sympy"）：不调 python，走错误路径清理占位符
-            this.applySympyResult(block, new Error('empty expression'), '', '');
+        // 触发解析（prefix 正则 `∴ ?(.+?) ?(?:<命令词>|([A-Za-z]+)\[([^\]]*)\]) ?∴ ?c$`）：
+        // match[1] = 表达式；match[2] = 命令词（collect x / expand / ... / evaluate）
+        // match[3]/match[4] = 带参 Wolfram 函数形式 fn[args]（如 Collect[x]、D[x]、Solve[x]）
+        // 仅 ∴c 命令触发；∴ 定界与 ∴d 后缀均不触发（settings prefix 无对应分支）
+        const expr = match[1].trim();
+        let op;
+        let arg;
+        let fnName = null;
+        let fnArgs = null;
+        if (match[3]) {
+            // 带参形式 fn[args]：expr 作为 Wolfram 函数的第一参数
+            fnName = match[3];
+            fnArgs = match[4] !== undefined ? match[4] : '';
+            op = 'fn';
+            arg = null;
+        } else {
+            ({ op, arg } = match[2] ? parseOpWord(match[2]) : { op: 'evaluate', arg: null });
+        }
+        if (!expr) {
+            // 空表达式（如 "∴  ∴c" 之类无有效表达式）：不调引擎，走错误路径清理占位符
+            this.applySympyResult(match[0], new Error('empty expression'), '', '');
             return SYMPY_PLACEHOLDER;
         }
-        const script = buildSympyScript(parsed.expr, parsed.op, parsed.arg, new Map());
-        const pythonPath = getPythonPath();
-        execFile(pythonPath, ['-c', script], { timeout: 15000 }, (err, stdout, stderr) => {
-            this.applySympyResult(block, err, stdout, stderr);
+        // 双后端：latex-helper.casBackend 决定块求值引擎
+        // - sympy：latex2sympy2 管道（默认，快捷键计算器同源）
+        // - wolfram：wolframscript -code "ToString[..., TeXForm]"
+        const backend = vscode.workspace.getConfiguration('latex-helper').get('casBackend', 'sympy');
+        // 带参 fn[args] 是 Wolfram 函数语义，仅 wolfram 后端支持
+        if (fnName && backend !== 'wolfram') {
+            this.applySympyResult(match[0], new Error('fn[args] only supported by wolfram backend'), '', '');
+            return SYMPY_PLACEHOLDER;
+        }
+        let execPath;
+        let args;
+        if (backend === 'wolfram') {
+            execPath = getWolframPath();
+            // 用户输入 LaTeX 语法（\frac \sin \int 等）→ 先转 Wolfram 表达式
+            args = ['-code', buildWolframScript(tex2wolfram(expr), op, arg, fnName, fnArgs)];
+        } else {
+            execPath = getPythonPath();
+            args = ['-c', buildSympyScript(expr, op, arg, new Map())];
+        }
+        // wolframscript 引擎启动较慢，超时放宽到 30s；sympy 保持 15s
+        const timeout = backend === 'wolfram' ? 30000 : 15000;
+        execFile(execPath, args, { timeout }, (err, stdout, stderr) => {
+            this.applySympyResult(expr, err, stdout, stderr);
         });
         return SYMPY_PLACEHOLDER;
     }
@@ -358,7 +456,7 @@ class LiveSnippetWatcher {
             if (failed) {
                 console.error('LaTeX Helper: sympy failed for', command, err ? err.message : stderr);
             }
-            const result = failed ? SYMPY_ERROR : stdout;
+            const result = failed ? SYMPY_ERROR : stdout.trim();
 
             // 全文搜索占位符（通常在同一行；用户期间编辑过也能找到）
             const fullText = editor.document.getText();
@@ -407,7 +505,9 @@ module.exports = {
     LiveSnippetWatcher,
     computeFraction,
     parseSympyBlock,
+    parseOpWord,
     buildSympyScript,
+    buildWolframScript,
     SYMPY_PLACEHOLDER,
     SYMPY_ERROR
 };
