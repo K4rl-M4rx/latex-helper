@@ -20,8 +20,8 @@ Module._cache['vscode-stub'] = {
 
 const { getModeAtPosition } = require('../src/utils/tex');
 const { expandBody } = require('../src/snippets/provider');
-const { normalizeSnippets, parseSympyPrefix } = require('../src/snippets/config');
-const { computeFraction, parseSympyBlock, buildSympyScript } = require('../src/snippets/live-watcher');
+const { normalizeSnippets } = require('../src/snippets/config');
+const { computeFraction, parseSympyBlock, parseOpWord, buildSympyScript, buildWolframScript } = require('../src/snippets/live-watcher');
 
 let passed = 0;
 let failed = 0;
@@ -159,33 +159,7 @@ console.log('== normalizeSnippets（默认值规则对齐原插件）==');
     check('按 priority 排序（首位）', out[0].prefix, 'c$');
 }
 
-console.log('== normalizeSnippets（SYMPY 模板交互字段）==');
-{
-    const out = normalizeSnippets([
-        { prefix: 'sympy ?(.+?) ?sympy ?$', body: 'SPECIAL_ACTION_SYMPY', triggerWhenComplete: true }
-    ]);
-    const s = out[0];
-    check('提取 sympyOpen', s.sympyOpen, 'sympy');
-    check('sympyOpenRegex 匹配行尾 sympy', s.sympyOpenRegex && s.sympyOpenRegex.test('x + sympy'), true);
-    check('sympyOpenRegex 不匹配表达式', s.sympyOpenRegex && s.sympyOpenRegex.test('sympy x^2'), false);
-    // 非 open ?(.+?) ?close ?$ 形态的 SYMPY prefix：sympyOpen 为 null，回退旧行为
-    const legacy = normalizeSnippets([
-        { prefix: 'h$', body: 'SPECIAL_ACTION_SYMPY', triggerWhenComplete: true }
-    ])[0];
-    check('不可解析形态 → sympyOpen null', legacy.sympyOpen, null);
-}
 
-console.log('== parseSympyPrefix（SYMPY 模板交互的 prefix 解析）==');
-{
-    const p = parseSympyPrefix('sympy ?(.+?) ?sympy ?$');
-    check('用户形态提取 open', p && p.open, 'sympy');
-    check('用户形态提取 close', p && p.close, 'sympy');
-    const p2 = parseSympyPrefix('calc (.+?) end$');
-    check('变体 open', p2 && p2.open, 'calc');
-    check('变体 close', p2 && p2.close, 'end');
-    check('无捕获组 → null', parseSympyPrefix('h$'), null);
-    check('无收尾词 → null', parseSympyPrefix('sympy (.+?)$'), null);
-}
 
 console.log('== parseSympyBlock / buildSympyScript（SPECIAL_ACTION_SYMPY 表达式内传参）==');
 {
@@ -215,6 +189,45 @@ console.log('== parseSympyBlock / buildSympyScript（SPECIAL_ACTION_SYMPY 表达
     check('solve 含 = 走 Eq', buildSympyScript('x^2=4', 'solve', null, new Map()).includes('solve(Eq(__lhs, __rhs))'), true);
     check('solve 无 = 求零点', buildSympyScript('x^2-1', 'solve', null, new Map()).includes('latex(solve(__expr))'), true);
     check('表达式 JSON 注入', buildSympyScript('a"b', 'evaluate', null, new Map()).includes('\\"'), true);
+}
+
+console.log('== parseOpWord（操作词捕获组解析）==');
+{
+    const s = JSON.stringify;
+    check('collect 带变量', s(parseOpWord('collect x')), s({ op: 'collect', arg: 'x' }));
+    check('无参操作词', s(parseOpWord('expand')), s({ op: 'expand', arg: null }));
+    check('solve', s(parseOpWord('solve')), s({ op: 'solve', arg: null }));
+}
+
+console.log('== buildWolframScript（wolfram 后端）==');
+{
+    check('evaluate 裸表达式', buildWolframScript('Collect[x*y+x^2, x]', undefined, null), 'ToString[Collect[x*y+x^2, x], TeXForm]');
+    check('factor 包裹', buildWolframScript('x^2-1', 'factor', null), 'ToString[Factor[x^2-1], TeXForm]');
+    check('expand 包裹', buildWolframScript('(x+1)^2', 'expand', null), 'ToString[Expand[(x+1)^2], TeXForm]');
+    check('simplify 包裹', buildWolframScript('Sin[x]^2+Cos[x]^2', 'simplify', null), 'ToString[Simplify[Sin[x]^2+Cos[x]^2], TeXForm]');
+    check('fullsimplify', buildWolframScript('x^3-1', 'fullsimplify', null), 'ToString[FullSimplify[x^3-1], TeXForm]');
+    check('collect 带变量', buildWolframScript('x*y+x^2', 'collect', 'x'), 'ToString[Collect[x*y+x^2, x], TeXForm]');
+    check('solve 求零点', buildWolframScript('x^2-1', 'solve', null), 'ToString[Solve[x^2-1 == 0], TeXForm]');
+    check('solve 含 = 自动转 ==', buildWolframScript('x^2=4', 'solve', null), 'ToString[Solve[x^2==4], TeXForm]');
+    check('solve 已有 == 不重复', buildWolframScript('x^2==4', 'solve', null), 'ToString[Solve[x^2==4], TeXForm]');
+    check('solve 含 >= 不受影响', buildWolframScript('x>=2', 'solve', null), 'ToString[Solve[x>=2 == 0], TeXForm]');
+    check('together/apart/cancel', buildWolframScript('x', 'together', null), 'ToString[Together[x], TeXForm]');
+    check('numerical', buildWolframScript('Pi', 'numerical', null), 'ToString[N[Pi], TeXForm]');
+    check('带参 Collect[x]', buildWolframScript('x*y+x^2', 'fn', null, 'Collect', 'x'), 'ToString[Collect[x*y+x^2, x], TeXForm]');
+    check('带参 D[x]', buildWolframScript('(x+1)^3', 'fn', null, 'D', 'x'), 'ToString[D[(x+1)^3, x], TeXForm]');
+    check('带参 Solve[x]', buildWolframScript('x^2==4', 'fn', null, 'Solve', 'x'), 'ToString[Solve[x^2==4, x], TeXForm]');
+    check('带参多参数', buildWolframScript('x^2', 'fn', null, 'Integrate', '{x, 0, 1}'), 'ToString[Integrate[x^2, {x, 0, 1}], TeXForm]');
+    check('带参空参数', buildWolframScript('x', 'fn', null, 'Factor', ''), 'ToString[Factor[x], TeXForm]');
+}
+
+console.log('== buildSympyScript 代数操作词扩展 ==');
+{
+    check('simplify 包裹', buildSympyScript('x', 'simplify', null, new Map()).includes('latex(simplify(__expr))'), true);
+    check('together 包裹', buildSympyScript('x', 'together', null, new Map()).includes('latex(together(__expr))'), true);
+    check('trigreduce → trigsimp', buildSympyScript('x', 'trigreduce', null, new Map()).includes('latex(trigsimp(__expr))'), true);
+    check('fullsimplify → simplify', buildSympyScript('x', 'fullsimplify', null, new Map()).includes('latex(simplify(__expr))'), true);
+    check('trigexpand → expand_trig', buildSympyScript('x', 'trigexpand', null, new Map()).includes('latex(expand_trig(__expr))'), true);
+    check('evaluate 恒等', buildSympyScript('x+1', 'evaluate', null, new Map()).includes('print(latex(__expr), end=\'\')'), true);
 }
 
 console.log('== computeFraction（SPECIAL_ACTION_FRACTION，对齐原插件 getFraction）==');

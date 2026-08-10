@@ -48,10 +48,20 @@ const RM_SNIPPET = {
 /** 各场景可替换的 snippet 配置（live-watcher 每次从配置读取） */
 let testSnippets = [RM_SNIPPET];
 
+/** 可切换的 casBackend（测试 fn[arg] 带参走 wolfram 分支） */
+let testCasBackend = 'sympy';
+
 const vscodeStub = {
     Position, Range, Selection, SnippetString,
     workspace: {
-        getConfiguration: () => ({ get: () => testSnippets })
+        getConfiguration: () => ({
+            get: (key, defaultValue) => {
+                // snippets 返回可替换的测试配置，其余按默认值（测试不真正求值）
+                if (key === 'snippets') return testSnippets;
+                if (key === 'casBackend') return testCasBackend;
+                return defaultValue;
+            }
+        })
     },
     window: { activeTextEditor: null },
     languages: {}
@@ -63,6 +73,26 @@ Module._resolveFilename = function (request, ...args) {
     return origResolve.call(this, request, ...args);
 };
 Module._cache['vscode-stub'] = { exports: vscodeStub };
+
+/** 场景 4-8 共用的 SYMPY prefix：仅 ∴c 命令触发（含 fn[arg] 带参分支，无 ∴d 分支） */
+const SYMPY_C_PREFIX =
+    '∴ ?(.+?) ?(?:(collect \\w+|expand|factor|simplify|fullsimplify|together|apart|cancel|trigreduce|trigexpand|powerexpand|numerical|solve|evaluate)|([A-Za-z]+)\\[([^\\]]*)\\]) ?∴ ?c$';
+const SYMPY_SNIPPET = {
+    prefix: SYMPY_C_PREFIX,
+    body: 'SPECIAL_ACTION_SYMPY',
+    mode: 'maths',
+    description: 'sympy block',
+    triggerWhenComplete: true,
+    priority: 3
+};
+
+// ---- stub execFile：SYMPY 求值不真跑 python/wolfram ----
+// live-watcher 在 require 时解构 child_process.execFile，先 patch 再加载模块
+const childProcess = require('child_process');
+let execFileCalls = [];
+childProcess.execFile = (execPath, args, _opts, _cb) => {
+    execFileCalls.push({ path: execPath, args });
+};
 
 const { LiveSnippetWatcher } = require('../src/snippets/live-watcher');
 
@@ -160,49 +190,87 @@ async function main() {
         check('覆盖输入：仍触发', editor.insertedSnippets.length === 1);
     }
 
-    // 场景 4：SYMPY 模板触发——行尾输入开头词 sympy → 插入 "sympy $1" 模板
-    //（tabstop 光标停在表达式处；用户输完表达式再输入收尾 sympy 才求值）
+    // 场景 4：SYMPY 块定界但不触发——行尾纯 ∴（无命令词、无 c）不计算
     {
-        testSnippets = [{
-            prefix: 'sympy ?(.+?) ?sympy ?$',
-            body: 'SPECIAL_ACTION_SYMPY',
-            mode: 'maths',
-            description: 'sympy',
-            triggerWhenComplete: true,
-            priority: 3
-        }];
-        const editor = makeEditor(['\\( x + sympy']);
+        testSnippets = [SYMPY_SNIPPET];
+        const editor = makeEditor(['\\( ∴ Collect[x*y+x^2, x] ∴']);
         vscodeStub.window.activeTextEditor = editor;
         const watcher = new LiveSnippetWatcher();
         await watcher.watcher(changeEvent(editor.document, [{
-            range: new Range(0, 12, 0, 12), // 输入了最后一个 y
-            text: 'y'
+            range: new Range(0, 26, 0, 26), // 输入了收尾 ∴
+            text: '∴'
         }]));
-        check('SYMPY 模板：删除开头词范围',
-            editor.edits.length === 1 && editor.edits[0].kind === 'delete');
-        check('SYMPY 模板：插入 "sympy $1"',
-            editor.insertedSnippets.length === 1 && editor.insertedSnippets[0] === 'sympy $1');
+        check('∴ 定界（无 c）：不产生编辑', editor.edits.length === 0);
+        check('∴ 定界（无 c）：不调用求值', execFileCalls.length === 0);
     }
 
-    // 场景 5：SYMPY 模板不误触发——开头词后面已有表达式（行尾不是开头词）
+    // 场景 5：SYMPY 块 ∴d 后缀不触发——d 触发已删除，仅 ∴c 命令触发
     {
-        testSnippets = [{
-            prefix: 'sympy ?(.+?) ?sympy ?$',
-            body: 'SPECIAL_ACTION_SYMPY',
-            mode: 'maths',
-            description: 'sympy',
-            triggerWhenComplete: true,
-            priority: 3
-        }];
-        const editor = makeEditor(['\\( sympy x^2']);
+        execFileCalls = [];
+        testSnippets = [SYMPY_SNIPPET];
+        const editor = makeEditor(['\\( ∴ x^2-1 ∴d']);
         vscodeStub.window.activeTextEditor = editor;
         const watcher = new LiveSnippetWatcher();
         await watcher.watcher(changeEvent(editor.document, [{
-            range: new Range(0, 12, 0, 12), // 输入表达式最后一个字符 2
-            text: '2'
+            range: new Range(0, 14, 0, 14), // 输入了触发字符 d
+            text: 'd'
         }]));
-        check('SYMPY 非完整块：不产生编辑', editor.edits.length === 0);
-        check('SYMPY 非完整块：不插入模板', editor.insertedSnippets.length === 0);
+        check('∴d（已删除）：不产生编辑', editor.edits.length === 0);
+        check('∴d（已删除）：不调用求值', execFileCalls.length === 0);
+    }
+
+    // 场景 6：SYMPY 块收尾纯 ∴ 不触发——命令模式要求 ∴c 结尾
+    {
+        execFileCalls = [];
+        testSnippets = [SYMPY_SNIPPET];
+        const editor = makeEditor(['\\( ∴ x^2-1 expand ∴']);
+        vscodeStub.window.activeTextEditor = editor;
+        const watcher = new LiveSnippetWatcher();
+        await watcher.watcher(changeEvent(editor.document, [{
+            range: new Range(0, 18, 0, 18), // 输入了收尾 ∴（expand 在 ∴ 前）
+            text: '∴'
+        }]));
+        check('纯 ∴ 收尾（需 ∴c）：不产生编辑', editor.edits.length === 0);
+        check('纯 ∴ 收尾（需 ∴c）：不调用求值', execFileCalls.length === 0);
+    }
+
+    // 场景 7：SYMPY 块 ∴c 命令触发——行尾输入 c（`∴ x^2-1 expand ∴c`）求值
+    {
+        execFileCalls = [];
+        testSnippets = [SYMPY_SNIPPET];
+        const editor = makeEditor(['\\( ∴ x^2-1 expand ∴c']);
+        vscodeStub.window.activeTextEditor = editor;
+        const watcher = new LiveSnippetWatcher();
+        await watcher.watcher(changeEvent(editor.document, [{
+            range: new Range(0, 19, 0, 19), // 输入了触发字符 c
+            text: 'c'
+        }]));
+        check('∴c 触发：整块替换为占位符',
+            editor.edits.length === 1 && editor.edits[0].kind === 'replace' &&
+            editor.edits[0].text === 'SYMPY_CALCULATING');
+        check('∴c 触发：调用了求值进程', execFileCalls.length === 1 && execFileCalls[0].args[0] === '-c');
+    }
+
+    // 场景 8：fn[arg] 带参触发——`∴ expr Collect[x] ∴c` 走 wolfram 分支（expr 作为第一参数）
+    {
+        execFileCalls = [];
+        testCasBackend = 'wolfram';
+        testSnippets = [SYMPY_SNIPPET];
+        const editor = makeEditor(['\\( ∴ x*y+x^2 Collect[x] ∴c']);
+        vscodeStub.window.activeTextEditor = editor;
+        const watcher = new LiveSnippetWatcher();
+        await watcher.watcher(changeEvent(editor.document, [{
+            range: new Range(0, 26, 0, 26), // 输入了触发字符 c
+            text: 'c'
+        }]));
+        check('fn[arg] 触发：整块替换为占位符',
+            editor.edits.length === 1 && editor.edits[0].kind === 'replace' &&
+            editor.edits[0].text === 'SYMPY_CALCULATING');
+        check('fn[arg] 触发：wolfram 分支 -code 参数为 Collect[expr, x]',
+            execFileCalls.length === 1 && execFileCalls[0].path === 'wolframscript' &&
+            execFileCalls[0].args[0] === '-code' &&
+            execFileCalls[0].args[1].includes('Collect[x*y+x^2, x]'));
+        testCasBackend = 'sympy';
     }
 
     console.log(`\n${passed} passed, ${failed} failed`);
