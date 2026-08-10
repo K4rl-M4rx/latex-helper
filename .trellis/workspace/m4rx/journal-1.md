@@ -68,3 +68,39 @@ Pin过滤/Recent开关、temp目录、修饰键复制、SPECIAL_ACTION、Theorem
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: SPECIAL_ACTION ∴c 块触发重构 + wolfram 双后端
+
+**Date**: 2026-08-10
+**Task**: SPECIAL_ACTION ∴c 块触发重构 + wolfram 双后端
+**Branch**: `main`
+
+### Summary
+
+重构 ∴ 块触发为仅 ∴c 命令模式（删除 ∴d）；wolfram 后端改用 ToString[expr, TeXForm]（TeXForm 在 wolframscript 1.13 不求值）、solve 等号自动转 ==、新增 LaTeX→Wolfram 转换器（tex2wolfram）与带参 fn[arg] 语法、∴ 块补全 provider（命令词+结构模板）；settings prefix 更新至 .backups/settings-updated.json 待用户 cp；新增 README
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9a51a43` | (see git log) |
+| `6b76d21` | (see git log) |
+| `ee2d342` | (see git log) |
+| `ac21621` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
