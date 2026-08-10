@@ -14,6 +14,7 @@ const { GroupModeTreeProvider } = require('./tree/group-mode');
 const { importSnippets } = require('./snippets/importer');
 const { registerSnippetProvider } = require('./snippets/provider');
 const { LiveSnippetWatcher } = require('./snippets/live-watcher');
+const { registerSympyCommands } = require('./sympy/calculator');
 
 /** @type {FormulaPanelProvider} */
 let panelProvider;
@@ -170,6 +171,9 @@ function activate(context) {
             liveWatcher.watcher(event);
         })
     );
+
+    // SymPy 计算器：选中表达式 + 快捷键求值（移植 latex-sympy-calculator 交互）
+    registerSympyCommands(context);
 
     // 注册命令
     context.subscriptions.push(

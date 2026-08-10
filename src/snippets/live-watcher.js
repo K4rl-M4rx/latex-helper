@@ -13,6 +13,7 @@ const vscode = require('vscode');
 const { execFile } = require('child_process');
 const { getLiveSnippets } = require('./config');
 const { getModeAtPosition } = require('../utils/tex');
+const { getPythonPath } = require('../utils/python');
 const { expandBody } = require('./provider');
 
 /** sympy 求值占位符：匹配后先同步插入，异步替换为 sympy 的 LaTeX 输出 */
@@ -270,12 +271,7 @@ class LiveSnippetWatcher {
     execSympy(match) {
         const command = buildSympyCommand(match[1]);
         const script = buildSympyScript(command);
-        // python 路径可配置：pipx/venv 装的 sympy 不在系统 python3 的 site-packages 里；
-        // execFile 不走 shell，~ 不会展开，这里手动展开
-        let pythonPath = vscode.workspace.getConfiguration('latex-helper').get('sympyPythonPath', 'python3');
-        if (pythonPath.startsWith('~/')) {
-            pythonPath = require('os').homedir() + pythonPath.slice(1);
-        }
+        const pythonPath = getPythonPath();
         execFile(pythonPath, ['-c', script], { timeout: 15000 }, (err, stdout, stderr) => {
             this.applySympyResult(command, err, stdout, stderr);
         });

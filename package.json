@@ -31,6 +31,78 @@
       {
         "command": "latex-helper.setGroupMode",
         "title": "Set Group Mode"
+      },
+      {
+        "command": "latex-helper.sympyEvaluate",
+        "title": "SymPy: Evaluate Selection"
+      },
+      {
+        "command": "latex-helper.sympyReplace",
+        "title": "SymPy: Replace Selection with Result"
+      },
+      {
+        "command": "latex-helper.sympyFactor",
+        "title": "SymPy: Factor Selection"
+      },
+      {
+        "command": "latex-helper.sympyExpand",
+        "title": "SymPy: Expand Selection"
+      },
+      {
+        "command": "latex-helper.sympyNumerical",
+        "title": "SymPy: Numerical Evaluation (15 digits)"
+      },
+      {
+        "command": "latex-helper.sympySolve",
+        "title": "SymPy: Solve Equation in Selection"
+      },
+      {
+        "command": "latex-helper.sympyEvalAt",
+        "title": "SymPy: Evaluate at Point (expr|_{x=...})"
+      },
+      {
+        "command": "latex-helper.sympyDefine",
+        "title": "SymPy: Define Variable from Selection (name = expr)"
+      },
+      {
+        "command": "latex-helper.sympyShowVars",
+        "title": "SymPy: Show Defined Variables"
+      },
+      {
+        "command": "latex-helper.sympyResetVars",
+        "title": "SymPy: Reset Variables"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "latex-helper.sympyEvaluate",
+        "key": "ctrl+alt+shift+e",
+        "mac": "ctrl+alt+shift+e",
+        "when": "editorTextFocus && editorLangId == latex"
+      },
+      {
+        "command": "latex-helper.sympyReplace",
+        "key": "ctrl+alt+shift+r",
+        "mac": "ctrl+alt+shift+r",
+        "when": "editorTextFocus && editorLangId == latex"
+      },
+      {
+        "command": "latex-helper.sympyFactor",
+        "key": "ctrl+alt+shift+f",
+        "mac": "ctrl+alt+shift+f",
+        "when": "editorTextFocus && editorLangId == latex"
+      },
+      {
+        "command": "latex-helper.sympyExpand",
+        "key": "ctrl+alt+shift+x",
+        "mac": "ctrl+alt+shift+x",
+        "when": "editorTextFocus && editorLangId == latex"
+      },
+      {
+        "command": "latex-helper.sympyNumerical",
+        "key": "ctrl+alt+shift+n",
+        "mac": "ctrl+alt+shift+n",
+        "when": "editorTextFocus && editorLangId == latex"
       }
     ],
     "viewsContainers": {
