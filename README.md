@@ -96,6 +96,15 @@
 - **latex2sympy2**（推荐）：完整 LaTeX 语法解析，`pip install latex2sympy2`
 - **Wolfram Engine + wolframscript**（可选）：`casBackend: wolfram` 时使用
 
+## 参考与致谢
+
+本项目的若干功能在设计与实现上参考了以下 VSCode 扩展，在此向它们的作者致以诚挚谢意：
+
+- [latex-sympy-calculator](https://marketplace.visualstudio.com/items?itemName=bcongdon.latex-sympy-calculator)（bcongdon）——符号计算器交互原型：选中表达式求值、快捷键计算器（Evaluate / Replace / Factor / Expand / Numerical）即移植自它的选中求值交互
+- [latex-utilities](https://marketplace.visualstudio.com/items?itemName=tecosaur.latex-utilities)（tecosaur）——`SPECIAL_ACTION_*` 特殊动作机制（SYMPY 块、FRACTION、BREAK 熔断）、live-reformat 的 snippet 触发与熔断模式；`latex-helper.snippets` 配置结构兼容其 `latex-utilities.liveReformat.snippets`，可无缝沿用既有配置
+
+感谢这些开源项目的作者：正是你们的灵感与无私分享，让本项目得以站在前人的肩膀上，用更少的时间做出更有用的工具。
+
 ## 开发
 
 ```bash
