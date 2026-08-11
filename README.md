@@ -2,7 +2,7 @@
 
 本地 VSCode 扩展：LaTeX 辅助工具集合。基于 Python、SymPy、LaTeX 与 dvisvgm 在文档编写时提供公式预览与符号计算能力。
 
-> 个人使用，不发布到市场。目标平台 macOS，要求 VSCode ≥ 1.85.0。
+> 个人使用，暂时不发布到市场。目标平台 macOS，要求 VSCode ≥ 1.85.0。本人只会 vibe coding，发 issue 不一定能解决，欢迎大家拿去自行修改。
 
 ## 功能
 
