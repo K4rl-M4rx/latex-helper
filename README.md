@@ -44,7 +44,7 @@
 - 命令词（表达式后、收尾 `∴` 前）：`collect <var>`、`expand`、`factor`、`simplify`、`fullsimplify`、`together`、`apart`、`cancel`、`trigreduce`、`trigexpand`、`powerexpand`、`numerical`、`solve`、`evaluate`
 - 引擎由 `latex-helper.casBackend` 切换（见[配置](#配置)）：
   - `sympy`：表达式直接用 latex2sympy2 解析
-  - `wolfram`：表达式先经内置 LaTeX → Wolfram 转换器（`\frac` `\sqrt` `\sin` `\int` `\frac{d}{dx}` `\sum` `\lim` 下标、隐式乘法等），再交给 wolframscript 求值；也兼容直接写 Wolfram 语法（`Sin[x]`、`D[...]`）
+  - `wolfram`：表达式先经内置 LaTeX → Wolfram 转换器（`\frac` `\sqrt` `\sin` `\int` `\frac{d}{dx}` `\sum` `\lim` 下标、隐式乘法等），再交给 wolframscript 求值；也兼容直接写 Wolfram 语法（`Sin[x]`、`D[...]`）。隐式乘法会保护 `Subscript`/`Sin` 等关键字：字母紧贴下标如 `fs_{2}` 先插 `*` 再保护，避免 `Subscript` 被拆成 `S*u*b*...`（曾导致 `simplify` 结果全错）
 - `∴ <expr> ∴` 定界不触发；`∴d` 后缀触发已移除，仅 `∴c` 命令触发
 - 该块语法由 `latex-helper.snippets` 中的 SYMPY 条目（`SPECIAL_ACTION_SYMPY`）驱动；数学模式下输入 `lm` 可快速插入 `∴ $1 ∴` 块（snippet `lm$`）
 

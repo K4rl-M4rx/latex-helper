@@ -213,6 +213,13 @@ function convertBracePowers(s) {
  * @returns {string}
  */
 function insertImplicitMul(s) {
+    // 字母/右括号紧贴关键字：fs_{2} → fSubscript[...] → 须先插 *，否则
+    // Subscript 因前缀是字母而保护失败，再被拆成 S*u*b*s*c*r*i*p*t（结果全错）。
+    // 数字前缀（2Pi）仍交给后续规则 / 占位符，保持 2Pi 写法。
+    s = s.replace(
+        new RegExp('([A-Za-z)])(' + PROTECTED_WORDS.join('|') + ')(?=[^A-Za-z0-9]|$)', 'g'),
+        '$1*$2'
+    );
     // 保护函数名/常量名：替换为单个非字母占位（\uE000..\uE001），乘法规则不会拆它们
     const placeholders = new Map();
     let id = 0;

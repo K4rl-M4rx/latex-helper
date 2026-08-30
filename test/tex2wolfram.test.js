@@ -83,6 +83,14 @@ check('x(y+1)', tex2wolfram('x(y+1)'), 'x*(y+1)');
 check('\\frac{1}{2}x^2', tex2wolfram('\\frac{1}{2}x^2'), '(1)/(2)*x^2');
 check('e^x 保留', tex2wolfram('e^x'), 'e^x');
 check('2\\pi 常量不拆散', tex2wolfram('2\\pi'), '2Pi');
+// 字母紧贴下标变量 / 函数：保护关键字前须先插 *，否则 Subscript/Sin 被拆字母
+check('fs_{2}^{2} 不拆 Subscript',
+    tex2wolfram('fs_{2}^{2}'), 'f*Subscript[s, 2]^(2)');
+check('x\\sin y 字母紧贴 Sin',
+    tex2wolfram('x\\sin y'), 'x*Sin[y]');
+check('用户 simplify 回归：fs_i 与隐式乘法',
+    tex2wolfram('f(2-f)s_{1}^{2}s_{2}^{2} - (f-1+(2-f)s_{1}^{2})(-f+fs_{2}^{2})'),
+    'f*(2-f)*Subscript[s, 1]^(2)*Subscript[s, 2]^(2) - (f-1+(2-f)*Subscript[s, 1]^(2))*(-f+f*Subscript[s, 2]^(2))');
 
 // 等号
 check('x^2=4 → ==', tex2wolfram('x^2=4'), 'x^2==4');
