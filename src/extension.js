@@ -173,7 +173,7 @@ function activate(context) {
         })
     );
 
-    // ∴ 块补全：命令词 + 表达式结构模板建议
+    // ∴ 块补全：Wolfram 伪代码 Fun[$1] 模板
     context.subscriptions.push(registerSympyBlockCompletion());
 
     // SymPy 计算器：选中表达式 + 快捷键求值（移植 latex-sympy-calculator 交互）

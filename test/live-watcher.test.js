@@ -48,8 +48,8 @@ const RM_SNIPPET = {
 /** 各场景可替换的 snippet 配置（live-watcher 每次从配置读取） */
 let testSnippets = [RM_SNIPPET];
 
-/** 可切换的 casBackend（测试 fn[arg] 带参走 wolfram 分支） */
-let testCasBackend = 'sympy';
+/** 可切换的 casBackend（历史字段；∴ 块已固定 wolfram，测试可忽略） */
+let testCasBackend = 'wolfram';
 
 const vscodeStub = {
     Position, Range, Selection, SnippetString,
@@ -59,6 +59,7 @@ const vscodeStub = {
                 // snippets 返回可替换的测试配置，其余按默认值（测试不真正求值）
                 if (key === 'snippets') return testSnippets;
                 if (key === 'casBackend') return testCasBackend;
+                if (key === 'wolframPath') return 'wolframscript';
                 return defaultValue;
             }
         })
@@ -74,14 +75,12 @@ Module._resolveFilename = function (request, ...args) {
 };
 Module._cache['vscode-stub'] = { exports: vscodeStub };
 
-/** 场景 4-8 共用的 SYMPY prefix：仅 ∴c 命令触发（含 fn[arg] 带参分支，无 ∴d 分支） */
-const SYMPY_C_PREFIX =
-    '∴ ?(.+?) ?(?:(collect \\w+|expand|factor|simplify|fullsimplify|together|apart|cancel|trigreduce|trigexpand|powerexpand|numerical|solve|evaluate)|([A-Za-z]+)\\[([^\\]]*)\\]) ?∴ ?c$';
+/** 场景 4+：SYMPY 条目只需 specialAction=sympy；块匹配走内置 SYMPY_BLOCK_RE */
 const SYMPY_SNIPPET = {
-    prefix: SYMPY_C_PREFIX,
+    prefix: '∴',
     body: 'SPECIAL_ACTION_SYMPY',
     mode: 'maths',
-    description: 'sympy block',
+    description: 'wolfram pseudo block',
     triggerWhenComplete: true,
     priority: 3
 };
@@ -197,7 +196,7 @@ async function main() {
         check('覆盖输入：仍触发', editor.insertedSnippets.length === 1);
     }
 
-    // 场景 4：SYMPY 块定界但不触发——行尾纯 ∴（无命令词、无 c）不计算
+    // 场景 4：SYMPY 块定界但不触发——行尾纯 ∴（无 c）不计算
     {
         testSnippets = [SYMPY_SNIPPET];
         const editor = makeEditor(['\\( ∴ Collect[x*y+x^2, x] ∴']);
@@ -215,81 +214,83 @@ async function main() {
     {
         execFileCalls = [];
         testSnippets = [SYMPY_SNIPPET];
-        const editor = makeEditor(['\\( ∴ x^2-1 ∴d']);
+        const editor = makeEditor(['\\( ∴ Factor[x^2-1] ∴d']);
         vscodeStub.window.activeTextEditor = editor;
         const watcher = new LiveSnippetWatcher();
         await watcher.watcher(changeEvent(editor.document, [{
-            range: new Range(0, 14, 0, 14), // 输入了触发字符 d
+            range: new Range(0, 20, 0, 20), // 输入了触发字符 d
             text: 'd'
         }]));
         check('∴d（已删除）：不产生编辑', editor.edits.length === 0);
         check('∴d（已删除）：不调用求值', execFileCalls.length === 0);
     }
 
-    // 场景 6：SYMPY 块收尾纯 ∴ 不触发——命令模式要求 ∴c 结尾
+    // 场景 6：SYMPY 块收尾纯 ∴ 不触发——要求 ∴c 结尾
     {
         execFileCalls = [];
         testSnippets = [SYMPY_SNIPPET];
-        const editor = makeEditor(['\\( ∴ x^2-1 expand ∴']);
+        const editor = makeEditor(['\\( ∴ Expand[(x+1)^2] ∴']);
         vscodeStub.window.activeTextEditor = editor;
         const watcher = new LiveSnippetWatcher();
         await watcher.watcher(changeEvent(editor.document, [{
-            range: new Range(0, 18, 0, 18), // 输入了收尾 ∴（expand 在 ∴ 前）
+            range: new Range(0, 21, 0, 21),
             text: '∴'
         }]));
         check('纯 ∴ 收尾（需 ∴c）：不产生编辑', editor.edits.length === 0);
         check('纯 ∴ 收尾（需 ∴c）：不调用求值', execFileCalls.length === 0);
     }
 
-    // 场景 7：SYMPY 块 ∴c 命令触发——行尾输入 c（`∴ x^2-1 expand ∴c`）求值
+    // 场景 7：∴c 触发——`∴ Factor[x^2-1] ∴c` 走 wolfram 伪代码
     {
         execFileCalls = [];
         testSnippets = [SYMPY_SNIPPET];
-        const editor = makeEditor(['\\( ∴ x^2-1 expand ∴c']);
+        const editor = makeEditor(['\\( ∴ Factor[x^2-1] ∴c']);
         vscodeStub.window.activeTextEditor = editor;
         const watcher = new LiveSnippetWatcher();
         await watcher.watcher(changeEvent(editor.document, [{
-            range: new Range(0, 19, 0, 19), // 输入了触发字符 c
+            range: new Range(0, 20, 0, 20), // 输入了触发字符 c
             text: 'c'
         }]));
         check('∴c 触发：整块替换为占位符',
             editor.edits.length === 1 && editor.edits[0].kind === 'replace' &&
             editor.edits[0].text === 'SYMPY_CALCULATING');
-        check('∴c 触发：调用了求值进程', execFileCalls.length === 1 && execFileCalls[0].args[0] === '-c');
+        check('∴c 触发：wolframscript -code',
+            execFileCalls.length === 1 &&
+            execFileCalls[0].path === 'wolframscript' &&
+            execFileCalls[0].args[0] === '-code' &&
+            execFileCalls[0].args[1].includes('Factor[x^2-1]'));
     }
 
-    // 场景 8：fn[arg] 带参触发——`∴ expr Collect[x] ∴c` 走 wolfram 分支（expr 作为第一参数）
+    // 场景 8：嵌套伪代码 —— `∴ Simplify[Collect[x*y+x^2, x]] ∴c`
     {
         execFileCalls = [];
-        testCasBackend = 'wolfram';
         testSnippets = [SYMPY_SNIPPET];
-        const editor = makeEditor(['\\( ∴ x*y+x^2 Collect[x] ∴c']);
+        const line = '\\( ∴ Simplify[Collect[x*y+x^2, x]] ∴c';
+        const editor = makeEditor([line]);
         vscodeStub.window.activeTextEditor = editor;
         const watcher = new LiveSnippetWatcher();
         await watcher.watcher(changeEvent(editor.document, [{
-            range: new Range(0, 26, 0, 26), // 输入了触发字符 c
+            range: new Range(0, line.length - 1, 0, line.length - 1),
             text: 'c'
         }]));
-        check('fn[arg] 触发：整块替换为占位符',
+        check('嵌套伪代码：整块替换为占位符',
             editor.edits.length === 1 && editor.edits[0].kind === 'replace' &&
             editor.edits[0].text === 'SYMPY_CALCULATING');
-        check('fn[arg] 触发：wolfram 分支 -code 参数为 Collect[expr, x]',
+        check('嵌套伪代码：Simplify[Collect[…]]',
             execFileCalls.length === 1 && execFileCalls[0].path === 'wolframscript' &&
             execFileCalls[0].args[0] === '-code' &&
-            execFileCalls[0].args[1].includes('Collect[x*y+x^2, x]'));
-        testCasBackend = 'sympy';
+            execFileCalls[0].args[1].includes('Simplify[Collect[x*y+x^2, x]]'));
     }
 
-    // 场景 9：多行 pmatrix —— 换行后仍可 ∴c 触发
+    // 场景 9：多行 Det[pmatrix] —— 换行后仍可 ∴c 触发
     {
         execFileCalls = [];
-        testCasBackend = 'wolfram';
         testSnippets = [SYMPY_SNIPPET];
         const editor = makeEditor([
-            '\\( ∴ \\det \\begin{pmatrix}',
+            '\\( ∴ Det[\\begin{pmatrix}',
             '        fs_1s_2 & f-1+(2-f)s_1^2\\\\',
             '        -f+fs_2^2 & (2-f)s_1s_2',
-            '      \\end{pmatrix} evaluate ∴c'
+            '      \\end{pmatrix}] ∴c'
         ]);
         vscodeStub.window.activeTextEditor = editor;
         const watcher = new LiveSnippetWatcher();
@@ -298,29 +299,29 @@ async function main() {
             range: new Range(3, last.length - 1, 3, last.length - 1),
             text: 'c'
         }]));
-        check('多行 pmatrix：触发求值', execFileCalls.length === 1);
-        check('多行 pmatrix：替换为占位符',
+        check('多行 Det[pmatrix]：触发求值', execFileCalls.length === 1);
+        check('多行 Det[pmatrix]：替换为占位符',
             editor.edits.length === 1 && editor.edits[0].text === 'SYMPY_CALCULATING');
-        check('多行 pmatrix：wolfram 收到 Det[',
+        check('多行 Det[pmatrix]：wolfram 收到 Det[',
             execFileCalls.length === 1 && String(execFileCalls[0].args[1] || '').includes('Det['));
-        testCasBackend = 'sympy';
     }
 
-    // matchSympyBlock 纯函数：跨行捕获表达式
+    // matchSympyBlock 纯函数：跨行捕获伪代码
     {
         const doc = makeEditor([
-            '∴ \\begin{pmatrix}',
+            '∴ Det[\\begin{pmatrix}',
             'a&b\\\\',
             'c&d',
-            '\\end{pmatrix} evaluate ∴c'
+            '\\end{pmatrix}] ∴c'
         ]).document;
         const hit = matchSympyBlock(doc, 3, doc.lines[3].length);
         check('matchSympyBlock：命中多行块', Boolean(hit));
-        check('matchSympyBlock：表达式含换行与 pmatrix',
+        check('matchSympyBlock：伪代码含换行与 pmatrix',
             Boolean(hit && hit.match[1].includes('pmatrix') && hit.match[1].includes('\n')));
-        check('matchSympyBlock：命令词 evaluate', Boolean(hit && hit.match[2] === 'evaluate'));
+        check('matchSympyBlock：正文以 Det[ 开头',
+            Boolean(hit && /^\s*Det\[/.test(hit.match[1])));
         check('matchSympyBlock：无 c 不命中',
-            matchSympyBlock(makeEditor(['∴ x evaluate ∴']).document, 0, '∴ x evaluate ∴'.length) === null);
+            matchSympyBlock(makeEditor(['∴ Factor[x] ∴']).document, 0, '∴ Factor[x] ∴'.length) === null);
     }
 
     console.log(`\n${passed} passed, ${failed} failed`);

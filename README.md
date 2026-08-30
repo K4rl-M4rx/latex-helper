@@ -1,6 +1,6 @@
 # LaTeX Helper
 
-本地 VSCode 扩展：LaTeX 辅助工具集合。基于 Python、SymPy、LaTeX 与 dvisvgm 在文档编写时提供公式预览与符号计算能力。
+本地 VSCode 扩展：LaTeX 辅助工具集合。在写稿时提供公式 SVG 预览，以及两套符号计算入口——**选区快捷键（SymPy）**与 **`∴` 块 Wolfram 伪代码（wolframscript）**。
 
 > 个人使用，暂时不发布到市场。目标平台 macOS，要求 VSCode ≥ 1.85.0。本人只会 vibe coding，发 issue 不一定能解决，欢迎大家拿去自行修改。
 
@@ -28,32 +28,41 @@
 
 变量值经 JSON 注入拼进 python 脚本，杜绝 shell / 脚本注入。每次调用 spawn 一次 python 进程（无常驻服务）。
 
-### 2. 实时公式计算块（`∴ ... ∴c`）
+### 2. 实时计算块：Wolfram 伪代码（`∴ Fun[…] ∴c`）
 
-在文档中直接书写 `∴ <表达式> <命令> ∴c`，输入最后一个 `c` 的瞬间，整块替换为计算结果（表达式用 LaTeX 语法，两个引擎都支持；**表达式可换行**，适合 `pmatrix` 等多行环境）：
+#### 设计思想
+
+`∴` 块不再使用「表达式 + 尾部命令词」（如 `∴ x^2-1 factor ∴c`），而是把块内正文当成**缩小版的 Wolfram 语言**：
+
+1. **外层是算子，内层是对象**：写成 `Fun[args]` / `Fun1[Fun2[…]]`，嵌套即复合变换（例如先求行列式再化简：`Simplify[Det[…]]`）。
+2. **函数名大小写不敏感，语义对齐 Wolfram**：`simplify` / `Simplify` / `SIMPLIFY` 都归一成合法符号；裸参数里的别名同样归一（`Collect[eq, x, simplify]` → 第三参 `Simplify`），但**不会**把变量 `x` 改成 `X`。
+3. **叶子允许混写 LaTeX**：矩阵、`\frac`、下标等仍按 TeX 写在参数里，由内置 `tex2wolfram` 转成 Wolfram 再求值；已是 `Sin[x]`、`{{a,b},{c,d}}` 的则原样保留。
+4. **参数可携带函数本身**：与 Wolfram 一致，例如对系数做化简用三参  
+   `Collect[expr, x, Simplify]`（第二参是变量，第三参是施加于系数的头）。
+5. **分界默认逗号，可配置**：顶层用 `,` 拆参（`[]`/`()`/`{}` 内不拆）；若 TeX 稿里逗号碍眼，可设 `latex-helper.wolframArgSeparator`（如 `@`），编译输出给引擎时仍变成 Wolfram 逗号。
+6. **触发仍是 `∴c`**：写完伪代码后输入收尾的 `c`，整块同步换成占位符，再异步换成 TeXForm 结果。引擎固定为 **wolframscript**（`casBackend: sympy` 对 `∴` 已弃用）。
+
+#### 示例
 
 ```
-∴ x^2-1 factor ∴c       →  (x-1) (x+1)
-∴ \frac{1}{x}+\frac{1}{x+1} together ∴c →  \frac{2 x+1}{x (x+1)}
-∴ x^2=4 solve ∴c         →  \{\{x\to -2\},\{x\to 2\}\}
-∴ \frac{d}{dx}(x^3+x^2+1) evaluate ∴c →  3 x^2+2 x
-∴ \int x^2 dx evaluate ∴c →  \frac{x^3}{3}
-∴ \lim_{x \to 0} \frac{\sin x}{x} evaluate ∴c →  1
-∴ \begin{vmatrix}a&b\\c&d\end{vmatrix} evaluate ∴c →  a d-b c
-∴ \det\begin{pmatrix}1&2\\3&4\end{pmatrix} evaluate ∴c →  -2
-∴ \det \begin{pmatrix}
-  a & b \\
-  c & d
-\end{pmatrix} evaluate ∴c →  a d - b c
+∴ Factor[x^2-1] ∴c
+∴ Together[\frac{1}{x}+\frac{1}{x+1}] ∴c
+∴ Solve[x^2=4, x] ∴c
+∴ D[x^3+x^2+1, x] ∴c
+∴ Integrate[x^2, x] ∴c
+∴ Det[\begin{vmatrix}a&b\\c&d\end{vmatrix}] ∴c
+∴ Simplify[Det[\begin{pmatrix}1&2\\3&4\end{pmatrix}]] ∴c
+∴ Collect[x y + x^2, x, Simplify] ∴c
+∴ Collect[x y + x^2 @ x @ simplify] ∴c   （若 wolframArgSeparator 为 @）
 ```
 
-- 命令词（表达式后、收尾 `∴` 前）：`collect <var>`、`expand`、`factor`、`simplify`、`fullsimplify`、`together`、`apart`、`cancel`、`trigreduce`、`trigexpand`、`powerexpand`、`numerical`、`solve`、`evaluate`
-- 引擎由 `latex-helper.casBackend` 切换（见[配置](#配置)）：
-  - `sympy`：表达式直接用 latex2sympy2 解析
-  - `wolfram`：表达式先经内置 LaTeX → Wolfram 转换器（`\frac` `\sqrt` `\sin` `\int` `\frac{d}{dx}` `\sum` `\lim`、**矩阵/`\det`**、下标、隐式乘法等），再交给 wolframscript 求值；也兼容直接写 Wolfram 语法（`Sin[x]`、`D[...]`、`Det[{{a,b},{c,d}}]`）。隐式乘法会保护 `Subscript`/`Sin` 等关键字：字母紧贴下标如 `fs_{2}` 先插 `*` 再保护，避免 `Subscript` 被拆成 `S*u*b*...`（曾导致 `simplify` 结果全错）
-  - 行列式（**建议 `casBackend: wolfram`**）：`\begin{vmatrix}...\end{vmatrix}`、`\det\begin{pmatrix|bmatrix}...\end{...}` → `Det[{{...}}]`；`\begin{pmatrix}...\end{pmatrix}`  alone → `{{...}}`；`\det A` → `Det[A]`。sympy/latex2sympy2 对 vmatrix 支持不可靠
-- `∴ <expr> ∴` 定界不触发；`∴d` 后缀触发已移除，仅 **`∴c`** 命令触发（多行块也一样，最后输入 `c`）
-- 该块语法由 `latex-helper.snippets` 中的 SYMPY 条目（`SPECIAL_ACTION_SYMPY`）驱动；数学模式下输入 `lm` 可快速插入 `∴ $1 ∴` 块（snippet `lm$`）
+多行 `pmatrix` 等也可写在同一 `∴ … ∴c` 内。补全在 `∴` 后会提示 `Fun[$1]` 模板。
+
+- **旧语法已移除**：请用 `∴ Factor[expr] ∴c`，不要再写 `∴ expr factor ∴c`
+- 叶子 LaTeX → Wolfram：`\frac` `\sqrt` `\sin` `\int` `\frac{d}{dx}` `\sum` `\lim`、矩阵/`\det`、下标、隐式乘法等；`fs_{2}` 会先插 `*` 再保护 `Subscript`，避免关键字被拆开
+- 行列式：`vmatrix` / `\det\begin{pmatrix|bmatrix}` → `Det[{{…}}]`；也可直接写 `Det[{{a,b},{c,d}}]`
+- `∴ <…> ∴` 定界不触发；仅 **`∴c`** 触发
+- 由 `latex-helper.snippets` 中 `SPECIAL_ACTION_SYMPY` 驱动；数学模式下 `lm` 可插入 `∴ $1 ∴`（snippet `lm$`）
 
 ### 3. 公式面板 / 公式浏览器
 
@@ -91,9 +100,10 @@
 | 配置项 | 默认 | 说明 |
 |---|---|---|
 | `latex-helper.snippets` | `[]` | LaTeX snippet 定义（含 SYMPY 块、BREAK 熔断、FRACTION 等特殊动作） |
-| `latex-helper.casBackend` | `sympy` | `∴ ... ∴c` 块求值引擎：`sympy`（latex2sympy2 管道）或 `wolfram`（wolframscript + 内置 LaTeX→Wolfram 转换器） |
-| `latex-helper.sympyPythonPath` | `python3` | 带 sympy 的 python3 路径（pipx 安装如 `~/.local/pipx/venvs/sympy/bin/python3`） |
-| `latex-helper.wolframPath` | `wolframscript` | wolframscript 可执行文件路径（Wolfram Engine） |
+| `latex-helper.casBackend` | `wolfram` | `∴` 块固定 wolfram；`sympy` 选项已弃用（忽略）。选区快捷键仍用 python |
+| `latex-helper.sympyPythonPath` | `python3` | 带 sympy 的 python3 路径（仅选区快捷键计算器） |
+| `latex-helper.wolframPath` | `wolframscript` | wolframscript 可执行文件路径（`∴` 块与 Wolfram Engine） |
+| `latex-helper.wolframArgSeparator` | `,` | `∴ Fun[…]` 顶层参数分界符（默认逗号；可改为 `@`、`;` 等）。只在 `[]`/`()`/`{}` 外层拆分；交给 Wolfram 时仍写成逗号 |
 | `latex-helper.latexPath` | `latex` | latex 可执行文件路径（DVI 模式） |
 | `latex-helper.dvisvgmPath` | `dvisvgm` | dvisvgm 可执行文件路径 |
 | `latex-helper.auxPath` | `./temp` | `.aux` 辅助文件目录（引用检测用） |
@@ -101,9 +111,9 @@
 ## 依赖
 
 - **LaTeX**（DVI 模式）+ **dvisvgm**：公式 / 定理 SVG 预览
-- **python3 + sympy**：快捷键计算器与 `∴ ... ∴c` 块的 sympy 后端
-- **latex2sympy2**（推荐）：完整 LaTeX 语法解析，`pip install latex2sympy2`
-- **Wolfram Engine + wolframscript**（可选）：`casBackend: wolfram` 时使用
+- **python3 + sympy**：选区快捷键计算器（`∴` 块已不用）
+- **latex2sympy2**（推荐）：快捷键计算器完整 LaTeX 解析，`pip install latex2sympy2`
+- **Wolfram Engine + wolframscript**（`∴` 块必需）：伪代码求值
 
 ## 参考与致谢
 
@@ -118,12 +128,13 @@
 
 ```bash
 npm run lint                 # ESLint
-node test/*.test.js          # 单元测试（cache/compiler/live-watcher/parser/snippets/sympy/webview）
+npm test                     # 全量单元测试（scripts/run-tests.js → test/*.test.js）
 npm run clean-temp           # 清空项目 temp/（公式预览缓存、调试产物）
 ./scripts/clean-temp.command # 同上，带确认提示（可双击）
 ```
 
 `temp/` 已在 `.gitignore` 中忽略，不入库。公式预览的增量缓存默认也在工作区 `temp/latex-helper-cache/`。
+
 ## 已知限制
 
 - 快捷键计算器每次调用起一个 python 进程，首次调用较慢（15s 超时）
@@ -131,4 +142,5 @@ npm run clean-temp           # 清空项目 temp/（公式预览缓存、调试�
 - 定理预览的编号从 1 起排，与原文档编号不一致（standalone 独立编译所致）
 - 批量公式编译使用 `-halt-on-error`：一条坏公式会使整批失败；失败产物见 `~/.latex-helper-last-fail/`
 - 预览侧去掉空白行只影响 standalone 编译稿，不会改写用户源文件
-- 矩阵转换不支持嵌套矩阵、`array` 列格式；行列式请用 wolfram 后端（`vmatrix` / `\det\begin{pmatrix}`）
+- 矩阵转换不支持嵌套矩阵、`array` 列格式；行列式请用 `∴ Det[…]` / wolfram 伪代码
+- 公式预览使用 `latex`（DVI）：中文文档的 `ctex` 在 macOS 上会选 `macold` 字库并报错；扩展会在预览稿中强制 `fontset=fandol`，并剥离 `xeCJK` / `\setCJKmainfont`（不影响用户源文件）

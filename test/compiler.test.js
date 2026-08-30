@@ -23,6 +23,7 @@ const {
     namespaceSvgIds,
     svgHash,
     ensureQtyCompatibility,
+    sanitizePreambleForDviPreview,
     normalizeQtyBlankLines,
     sanitizeFormulaBody,
     preambleUsesPackage,
@@ -123,6 +124,25 @@ const doc = buildStandaloneDoc(
 );
 check('standalone 含运行时 IfPackageLoadedTF（覆盖 \\input）', doc.includes('\\IfPackageLoadedTF{physics}'));
 check('standalone 去掉空白行', doc.includes('\\qty{5}\n{\\metre}') && !/\\qty\{5\}\n[ \t]*\n\{/.test(doc));
+
+console.log('== sanitizePreambleForDviPreview (ctex/macold) ==');
+check('ctex UTF8 → fandol',
+    sanitizePreambleForDviPreview('\\usepackage[UTF8]{ctex}') ===
+    '\\usepackage[UTF8,fontset=fandol]{ctex}');
+check('ctex fontset=mac → fandol',
+    sanitizePreambleForDviPreview('\\usepackage[UTF8,fontset=mac]{ctex}') ===
+    '\\usepackage[UTF8,fontset=fandol]{ctex}');
+check('剥离 xeCJK',
+    sanitizePreambleForDviPreview('\\usepackage{xeCJK}\n\\usepackage{amsmath}').includes('stripped xeCJK') &&
+    !sanitizePreambleForDviPreview('\\usepackage{xeCJK}\n').includes('\\usepackage{xeCJK}'));
+check('剥离 setCJKmainfont',
+    !sanitizePreambleForDviPreview('\\setCJKmainfont{Songti SC}\n').includes('setCJKmainfont'));
+const ctexDoc = buildStandaloneDoc(
+    '\\documentclass{ctexart}\n\\usepackage[UTF8]{ctex}\n\\usepackage{amsmath}\n',
+    [{ label: 'e1', body: '\\begin{equation}\\label{e1}a=b\\end{equation}' }]
+);
+check('standalone 含 fandol 不含裸 ctex UTF8',
+    ctexDoc.includes('fontset=fandol') && !/\\usepackage\[UTF8\]\{ctex\}/.test(ctexDoc));
 
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

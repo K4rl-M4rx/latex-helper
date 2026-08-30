@@ -14,28 +14,19 @@ const os = require('os');
 const { execFile } = require('child_process');
 const { getLiveSnippets } = require('./config');
 const { getModeAtPosition } = require('../utils/tex');
-const { getPythonPath } = require('../utils/python');
 const { expandBody } = require('./provider');
-const { buildPrelude } = require('../sympy/calculator');
-const { tex2wolfram } = require('./tex2wolfram');
+const { buildPseudoWolframScript, compileWolframPseudo } = require('./wolfram-pseudo');
 
 /** sympy 求值占位符：匹配后先同步插入，异步替换为 sympy 的 LaTeX 输出 */
 const SYMPY_PLACEHOLDER = 'SYMPY_CALCULATING';
 /** sympy 求值失败时短暂显示的文本（400ms 后删除） */
 const SYMPY_ERROR = 'SYMPY_ERROR';
 
-/** ∴ 块命令词（与 settings prefix / 补全列表对齐） */
-const SYMPY_OP_ALT =
-    'collect \\w+|expand|factor|simplify|fullsimplify|together|apart|cancel|trigreduce|trigexpand|powerexpand|numerical|solve|evaluate';
-
 /**
- * 跨行匹配 ∴ 块（表达式内禁止再出现 ∴；允许换行）。
- * 捕获组与历史单行 prefix 一致：1=expr，2=命令词，3=fnName，4=fnArgs。
- * 用 (?!∴) 避免把更早的完整块吞进当前表达式。
+ * 跨行匹配 ∴ 块：∴ <Wolfram 伪代码> ∴c
+ * 捕获组 1 = 伪代码正文（内禁止再出现 ∴；允许换行与 Fun[Fun2[…]] 嵌套）
  */
-const SYMPY_BLOCK_RE = new RegExp(
-    '∴ ?((?:(?!∴)[\\s\\S])+?) ?(?:(' + SYMPY_OP_ALT + ')|([A-Za-z]+)\\[([^\\]]*)\\]) ?∴ ?c$'
-);
+const SYMPY_BLOCK_RE = /∴ ?((?:(?!∴)[\s\S])+?) ?∴ ?c$/;
 
 /** 向前最多看多少行找块起点（pmatrix 等常见不会超过这个） */
 const SYMPY_LOOKBACK_LINES = 80;
@@ -79,143 +70,6 @@ function matchSympyBlock(document, endLine, endChar) {
         match,
         range: new vscode.Range(offsetToPos(absStart), offsetToPos(absEnd))
     };
-}
-
-/**
- * 解析 SYMPY 块内表达式与可选操作词（表达式里直接传参）：
- * - `expr`                          → evaluate（默认）
- * - `expr collect <var>`            → 按指定变量收集（对应 Wolfram Collect）
- * - `expr factor | expand | numerical | solve | evaluate` → 对应操作
- * @param {string} block 完整块捕获组 1（如 "x^2+2x+1 collect x"）
- * @returns {{ expr: string, op: string, arg: string | null }}
- */
-function parseSympyBlock(block) {
-    let m = /^(.*?)\s+collect\s+([A-Za-z_]\w*)$/s.exec(block);
-    if (m) return { expr: m[1].trim(), op: 'collect', arg: m[2] };
-    m = /^(.*?)\s+(factor|expand|numerical|solve|evaluate)$/s.exec(block);
-    if (m) return { expr: m[1].trim(), op: m[2], arg: null };
-    return { expr: block.trim(), op: 'evaluate', arg: null };
-}
-
-/**
- * 操作词 → sympy 函数包裹（collect/solve/evaluate 特殊处理，其余查表）。
- * fullsimplify 无直接对应 → simplify；trigreduce → trigsimp；trigexpand → expand_trig。
- */
-const SYMPY_OP_FN = {
-    expand: 'expand(__expr)',
-    factor: 'factor(__expr)',
-    simplify: 'simplify(__expr)',
-    fullsimplify: 'simplify(__expr)',
-    together: 'together(__expr)',
-    apart: 'apart(__expr)',
-    cancel: 'cancel(__expr)',
-    trigreduce: 'trigsimp(__expr)',
-    trigexpand: 'expand_trig(__expr)',
-    powerexpand: 'powsimp(__expr)',
-    numerical: 'N(__expr, 15)'
-};
-
-/**
- * 操作词 → Wolfram 函数名（collect/solve/evaluate 特殊处理，其余查表）。
- */
-const WOLFRAM_OP_FN = {
-    expand: 'Expand',
-    factor: 'Factor',
-    simplify: 'Simplify',
-    fullsimplify: 'FullSimplify',
-    together: 'Together',
-    apart: 'Apart',
-    cancel: 'Cancel',
-    trigreduce: 'TrigReduce',
-    trigexpand: 'TrigExpand',
-    powerexpand: 'PowerExpand',
-    numerical: 'N'
-};
-
-/**
- * 解析 prefix 正则捕获的操作词（组 2）：
- * - "collect x" → { op: 'collect', arg: 'x' }
- * - "expand" → { op: 'expand', arg: null }
- * @param {string} opRaw
- * @returns {{ op: string, arg: string | null }}
- */
-function parseOpWord(opRaw) {
-    const m = /^collect\s+([A-Za-z_]\w*)$/.exec(opRaw);
-    if (m) return { op: 'collect', arg: m[1] };
-    return { op: opRaw, arg: null };
-}
-
-/**
- * 生成 python3 -c 脚本：复用快捷键计算器的 latex2sympy2 管道
- * （buildPrelude + __parse，支持 \frac 等完整 LaTeX 语法；操作语义与快捷键命令一致）。
- * - solve：表达式含 = 按方程求解（Eq），否则求零点
- * - 所有用户输入经 JSON.stringify 注入，杜绝注入
- * @param {string} latexExpr
- * @param {string} op
- * @param {string | null} arg
- * @param {Map<string, string>} vars 变量表（live-watcher 无变量表，传空 Map）
- * @returns {string}
- */
-function buildSympyScript(latexExpr, op, arg, vars) {
-    const prelude = buildPrelude(vars);
-    if (op === 'solve') {
-        const eqIdx = latexExpr.indexOf('=');
-        if (eqIdx !== -1) {
-            const lhs = latexExpr.slice(0, eqIdx).trim();
-            const rhs = latexExpr.slice(eqIdx + 1).trim();
-            return prelude +
-                '__lhs = __parse(' + JSON.stringify(lhs) + ')\n' +
-                '__rhs = __parse(' + JSON.stringify(rhs) + ')\n' +
-                'print(latex(solve(Eq(__lhs, __rhs))), end=\'\')';
-        }
-    }
-    let apply = '__expr';
-    if (op === 'collect') {
-        apply = 'collect(__expr, Symbol(' + JSON.stringify(arg) + '))';
-    } else if (SYMPY_OP_FN[op]) {
-        apply = SYMPY_OP_FN[op];
-    } else if (op === 'solve') {
-        apply = 'solve(__expr)';
-    }
-    return prelude +
-        '__expr = __parse(' + JSON.stringify(latexExpr) + ')\n' +
-        // latex2sympy2 把 \frac{d}{dx}、\int 解析为未求值的 Derivative/Integral，
-        // evaluate 语义要求算出结果；doit 对普通表达式是恒等，安全
-        "__expr = __expr.doit() if hasattr(__expr, 'doit') else __expr\n" +
-        'print(latex(' + apply + "), end='')";
-}
-
-/**
- * 生成 wolframscript 命令：ToString[expr, TeXForm] 输出 LaTeX。
- * - 注意：不能直接 TeXForm[...]——WolframScript 1.13 下 TeXForm 不作为
- *   函数求值（`TeXForm[x^2]` 原样返回），必须用 ToString[expr, TeXForm]。
- * - evaluate（命令词显式给出）：ToString[expr, TeXForm]，expr 为 Wolfram 表达式
- * - 代数操作词：ToString[Fn[expr], TeXForm] 等；collect → Collect[expr, var]；solve → Solve[expr == 0]
- * - 带参形式 fnName[fnArgs]：expr 作为第一参数 → ToString[Fn[expr, fnArgs], TeXForm]
- * @param {string} expr Wolfram 表达式
- * @param {string} op
- * @param {string | null} arg
- * @param {string | null} fnName 带参形式的 Wolfram 函数名（fn[args] 语法）
- * @param {string | null} fnArgs 带参形式的参数（Wolfram 语法，原样透传）
- * @returns {string}
- */
-function buildWolframScript(expr, op, arg, fnName, fnArgs) {
-    if (fnName) {
-        const suffix = fnArgs ? ', ' + fnArgs : '';
-        return 'ToString[' + fnName + '[' + expr + suffix + '], TeXForm]';
-    }
-    if (op === 'collect') return 'ToString[Collect[' + expr + ', ' + arg + '], TeXForm]';
-    if (op === 'solve') {
-        // 用户输入 LaTeX 风格单个 = 时转成 Wolfram 的 ==（x^2=4 → x^2==4），
-        // 已有 ==/<=/>=/!= 不受影响；无等号才补 == 0
-        const eq = expr.replace(/([^<>=!])=(?!=)/g, '$1==');
-        return eq.includes('==')
-            ? 'ToString[Solve[' + eq + '], TeXForm]'
-            : 'ToString[Solve[' + eq + ' == 0], TeXForm]';
-    }
-    const fn = WOLFRAM_OP_FN[op];
-    if (fn) return 'ToString[' + fn + '[' + expr + '], TeXForm]';
-    return 'ToString[' + expr + ', TeXForm]';
 }
 
 /**
@@ -442,59 +296,31 @@ class LiveSnippetWatcher {
     }
 
     /**
-     * SPECIAL_ACTION_SYMPY：启动 python3 + sympy 异步求值，返回占位符。
-     * 求值完成后把占位符替换为 LaTeX 输出；失败则短暂显示 SYMPY_ERROR（400ms 后删除）。
-     * 占位符定位不靠记忆 range（期间用户可能继续编辑），而是在文档中重新搜索。
+     * SPECIAL_ACTION_SYMPY：Wolfram 伪代码块，仅 wolfram 后端（python/sympy 已弃用）。
+     * 形态：∴ Fun[args] ∴c / ∴ Fun1[Fun2[…]] ∴c；叶子可含 LaTeX（tex2wolfram）。
      * @param {RegExpExecArray} match
      * @returns {string} 占位符文本
      */
     execSympy(match) {
-        // 触发解析（跨行块由 matchSympyBlock；捕获组同前）：
-        // match[1] = 表达式；match[2] = 命令词（collect x / expand / ... / evaluate）
-        // match[3]/match[4] = 带参 Wolfram 函数形式 fn[args]（如 Collect[x]、D[x]、Solve[x]）
-        // 仅 ∴c 命令触发；∴ 定界与 ∴d 后缀均不触发
-        const expr = match[1].trim();
-        let op;
-        let arg;
-        let fnName = null;
-        let fnArgs = null;
-        if (match[3]) {
-            // 带参形式 fn[args]：expr 作为 Wolfram 函数的第一参数
-            fnName = match[3];
-            fnArgs = match[4] !== undefined ? match[4] : '';
-            op = 'fn';
-            arg = null;
-        } else {
-            ({ op, arg } = match[2] ? parseOpWord(match[2]) : { op: 'evaluate', arg: null });
-        }
-        if (!expr) {
-            // 空表达式（如 "∴  ∴c" 之类无有效表达式）：不调引擎，走错误路径清理占位符
+        const body = (match[1] || '').trim();
+        if (!body) {
             this.applySympyResult(match[0], new Error('empty expression'), '', '');
             return SYMPY_PLACEHOLDER;
         }
-        // 双后端：latex-helper.casBackend 决定块求值引擎
-        // - sympy：latex2sympy2 管道（默认，快捷键计算器同源）
-        // - wolfram：wolframscript -code "ToString[..., TeXForm]"
-        const backend = vscode.workspace.getConfiguration('latex-helper').get('casBackend', 'sympy');
-        // 带参 fn[args] 是 Wolfram 函数语义，仅 wolfram 后端支持
-        if (fnName && backend !== 'wolfram') {
-            this.applySympyResult(match[0], new Error('fn[args] only supported by wolfram backend'), '', '');
+
+        let code;
+        try {
+            const argSeparator = vscode.workspace.getConfiguration('latex-helper')
+                .get('wolframArgSeparator', ',');
+            code = buildPseudoWolframScript(body, { argSeparator });
+        } catch (err) {
+            this.applySympyResult(match[0], err, '', '');
             return SYMPY_PLACEHOLDER;
         }
-        let execPath;
-        let args;
-        if (backend === 'wolfram') {
-            execPath = getWolframPath();
-            // 用户输入 LaTeX 语法（\frac \sin \int 等）→ 先转 Wolfram 表达式
-            args = ['-code', buildWolframScript(tex2wolfram(expr), op, arg, fnName, fnArgs)];
-        } else {
-            execPath = getPythonPath();
-            args = ['-c', buildSympyScript(expr, op, arg, new Map())];
-        }
-        // wolframscript 引擎启动较慢，超时放宽到 30s；sympy 保持 15s
-        const timeout = backend === 'wolfram' ? 30000 : 15000;
-        execFile(execPath, args, { timeout }, (err, stdout, stderr) => {
-            this.applySympyResult(expr, err, stdout, stderr);
+
+        const execPath = getWolframPath();
+        execFile(execPath, ['-code', code], { timeout: 30000 }, (err, stdout, stderr) => {
+            this.applySympyResult(body, err, stdout, stderr);
         });
         return SYMPY_PLACEHOLDER;
     }
@@ -562,12 +388,10 @@ class LiveSnippetWatcher {
 module.exports = {
     LiveSnippetWatcher,
     computeFraction,
-    parseSympyBlock,
-    parseOpWord,
-    buildSympyScript,
-    buildWolframScript,
     matchSympyBlock,
     SYMPY_BLOCK_RE,
     SYMPY_PLACEHOLDER,
-    SYMPY_ERROR
+    SYMPY_ERROR,
+    compileWolframPseudo,
+    buildPseudoWolframScript
 };

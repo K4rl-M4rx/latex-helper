@@ -100,6 +100,34 @@ function ensureQtyCompatibility(preamble) {
 }
 
 /**
+ * 为 DVI/pdfTeX 预览清洗 preamble。
+ * 主文档常用 xelatex + ctex（mac 上自动选 mac/macold），但公式预览管道是
+ * latex→dvisvgm，macold 在 pdfTeX 下不可用。强制 fontset=fandol（TeX Live 自带）；
+ * 去掉仅 XeTeX/LuaTeX 可用的中文字体命令与 xeCJK。
+ * @param {string} preamble
+ * @returns {string}
+ */
+function sanitizePreambleForDviPreview(preamble) {
+    let s = preamble;
+    // \usepackage[UTF8]{ctex} / \usepackage[fontset=mac]{ctex} → fandol
+    s = s.replace(
+        /\\usepackage(?:\[[^\]]*\])?\{ctex\}/g,
+        '\\usepackage[UTF8,fontset=fandol]{ctex}'
+    );
+    // \usepackage{xeCJK} 等在 DVI 下不可用
+    s = s.replace(
+        /\\usepackage(?:\[[^\]]*\])?\{xeCJK\*?\}\s*/g,
+        '% latex-helper: stripped xeCJK (DVI preview)\n'
+    );
+    // \setCJKmainfont{...} / \setCJKsansfont{...} / \setCJKmonofont{...}
+    s = s.replace(
+        /\\setCJK(?:main|sans|mono|family)font(?:\[[^\]]*\])?\{[^}]*\}\s*/g,
+        '% latex-helper: stripped setCJKfont (DVI preview)\n'
+    );
+    return s;
+}
+
+/**
  * 去掉公式 body 中的「纯空白行」。
  * TeX 把空行（含仅含空格/制表符的行）当成 \\par；equation/align 内非法，
  * 且 physics 的 \\qty{...}/\\@quantity 参数不容 \\par，会报
@@ -131,9 +159,12 @@ function buildStandaloneDoc(preamble, formulas) {
         `\\begin{minipage}{0.95\\textwidth}\n${sanitizeFormulaBody(f.body)}\n\\end{minipage}`
     ).join('\n');
 
-    // 剥掉用户 preamble 中的 \documentclass 行，用 standalone 替代
+    // 剥掉用户 preamble 中的 \documentclass 行，用 standalone 替代；
+    // 再清洗 ctex/CJK，最后注入 qty 兼容 fix
     const cleanedPreamble = ensureQtyCompatibility(
-        preamble.replace(/\\documentclass(?:\[.*?\]|\*)?\{[^}]*\}\s*\n?/g, '')
+        sanitizePreambleForDviPreview(
+            preamble.replace(/\\documentclass(?:\[.*?\]|\*)?\{[^}]*\}\s*\n?/g, '')
+        )
     );
 
     return [
@@ -370,6 +401,7 @@ module.exports = {
     buildStandaloneDoc,
     compileFormulas,
     ensureQtyCompatibility,
+    sanitizePreambleForDviPreview,
     normalizeQtyBlankLines,
     sanitizeFormulaBody,
     ensureSvgSize,

@@ -152,21 +152,32 @@
         "latex-helper.sympyPythonPath": {
           "type": "string",
           "default": "python3",
-          "description": "Path to python3 with sympy installed (e.g. ~/.local/pipx/venvs/sympy/bin/python3 for pipx installs)"
+          "description": "Path to python3 with sympy（仅快捷键选区计算器仍可用；∴ 块已弃用 python 后端）"
         },
         "latex-helper.casBackend": {
           "type": "string",
           "enum": [
-            "sympy",
-            "wolfram"
+            "wolfram",
+            "sympy"
           ],
-          "default": "sympy",
-          "description": "sympy ... sympy 块（∴ ... ∴c）的求值引擎：sympy（latex2sympy2 管道）或 wolfram（wolframscript TeXForm）"
+          "enumDescriptions": [
+            "wolframscript（∴ 块唯一支持的引擎）",
+            "已弃用：∴ 块不再使用 sympy/python，此选项无效"
+          ],
+          "default": "wolfram",
+          "description": "∴ 块引擎（已固定为 wolfram；sympy 选项保留仅为兼容旧配置，实际忽略）",
+          "deprecationMessage": "∴ 块仅使用 wolfram。请设置 latex-helper.casBackend 为 wolfram；sympy/python 后端已弃用。"
         },
         "latex-helper.wolframPath": {
           "type": "string",
           "default": "wolframscript",
           "description": "Path to wolframscript executable (Wolfram Engine)"
+        },
+        "latex-helper.wolframArgSeparator": {
+          "type": "string",
+          "default": ",",
+          "minLength": 1,
+          "description": "∴ 块伪代码 Fun[…] 顶层参数分界符（默认英文逗号 ,）。可改为 @、;、顿号等；仅在 []/()/{} 外层生效，编译输出仍为 Wolfram 逗号。"
         },
         "latex-helper.auxPath": {
           "type": "string",
@@ -178,6 +189,7 @@
   },
   "scripts": {
     "lint": "eslint .",
+    "test": "node scripts/run-tests.js",
     "clean-temp": "rm -rf temp && mkdir -p temp"
   },
   "devDependencies": {

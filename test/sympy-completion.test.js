@@ -6,16 +6,16 @@
 
 const Module = require('module');
 
-// ---- 假 vscode ----
-class CompletionItem {
-    constructor(label, kind) { this.label = label; this.kind = kind; }
-}
 class SnippetString {
     constructor(value) { this.value = value; }
 }
+class CompletionItem {
+    constructor(label, kind) { this.label = label; this.kind = kind; }
+}
 const vscodeStub = {
-    CompletionItem, SnippetString,
-    CompletionItemKind: { Function: 1 },
+    CompletionItem,
+    CompletionItemKind: { Function: 2 },
+    SnippetString,
     languages: { registerCompletionItemProvider: () => ({ dispose() {} }) }
 };
 const origResolve = Module._resolveFilename;
@@ -29,39 +29,36 @@ const { classifyPrefix, COMMANDS, FUNCTIONS, STRUCTURES } = require('../src/snip
 
 let passed = 0;
 let failed = 0;
-function check(name, cond) {
-    if (cond) { passed++; console.log(`  ok   ${name}`); }
-    else { failed++; console.log(`  FAIL ${name}`); }
+function check(name, actual, expected) {
+    const ok = arguments.length === 2 ? Boolean(actual) : actual === expected;
+    if (ok) {
+        passed++;
+        console.log('  ✓ ' + name);
+    } else {
+        failed++;
+        console.log('  ✗ ' + name);
+        console.log('    expected:', expected);
+        console.log('    actual  :', actual);
+    }
 }
 
 console.log('== classifyPrefix：∴ 块上下文分类 ==');
 check('∴ 刚输入 → structure', classifyPrefix('\\text{ } ∴') === 'structure');
 check('∴ 后空格 → structure', classifyPrefix('∴ ') === 'structure');
-check('∴ 表达式 → null', classifyPrefix('∴ x^2-1') === null);
-check('∴ 表达式+尾空格 → command', classifyPrefix('∴ x^2-1 ') === 'command');
-check('∴ 表达式+命令词前缀 → command', classifyPrefix('∴ x^2-1 f') === 'command');
-check('∴ 完整命令词 → command', classifyPrefix('∴ x^2-1 factor ') === 'command');
-check('无 ∴ → null', classifyPrefix('x^2-1 factor') === null);
-check('∴ 在行中间 → command', classifyPrefix('\\[ ∴ x^2-1 ') === 'command');
+check('∴ 函数名前缀 → command', classifyPrefix('∴ Sim') === 'command');
+check('∴ Simplify → command', classifyPrefix('∴ Simplify') === 'command');
+check('∴ Fun[…] 后 → command', classifyPrefix('∴ Factor[x^2-1]') === 'command');
+check('无 ∴ → null', classifyPrefix('Factor[x]') === null);
+check('∴ 在行中间空白 → structure', classifyPrefix('\\[ ∴ ') === 'structure');
 
 console.log('== 建议内容 ==');
-check('命令词 14 个', COMMANDS.length === 14);
-check('命令词含 evaluate/factor/solve/collect',
-    ['evaluate', 'factor', 'solve', 'collect'].every(l => COMMANDS.some(c => c.label === l)));
-check('collect 带 insertSnippet（无 ∴ 后缀）', COMMANDS.find(c => c.label === 'collect').insertSnippet === 'collect $1');
-check('普通命令词无 insertSnippet', COMMANDS.find(c => c.label === 'factor').insertSnippet === undefined);
-check('带参函数 insertSnippet 无 ∴ 后缀', FUNCTIONS.every(f => !(f.insertSnippet || '').includes('∴')));
-check('带参函数 8 个', FUNCTIONS.length === 8);
-check('带参含 D/Solve/Limit/Integrate/Collect',
-    ['D[x]', 'Solve[x]', 'Limit[x->a]', 'Integrate[{x,a,b}]', 'Collect[x]']
-        .every(l => FUNCTIONS.some(f => f.label === l)));
-check('结构模板 9 个', STRUCTURES.length === 9);
-check('结构模板含导数/积分/极限/求和',
-    ['\\frac{d}{dx}($0)', '\\int $0 dx', '\\lim_{$1 \\to $2} $0', '\\sum_{$1=$2}^{$3} $0']
-        .every(l => STRUCTURES.some(s => s.label === l)));
-check('结构模板含 vmatrix / det pmatrix',
-    STRUCTURES.some(s => s.label.includes('vmatrix')) &&
-    STRUCTURES.some(s => s.label.includes('det')));
+check('旧命令词已清空', COMMANDS.length === 0);
+check('FUNCTIONS 含 Simplify', FUNCTIONS.some(f => f.label.startsWith('Simplify')));
+check('FUNCTIONS 含 Det', FUNCTIONS.some(f => f.label.startsWith('Det')));
+check('FUNCTIONS insertSnippet 无 ∴ 后缀', FUNCTIONS.every(f => !(f.insertSnippet || '').includes('∴')));
+check('STRUCTURES 含嵌套模板', STRUCTURES.some(s => s.label.includes('Simplify[Det')));
+check('STRUCTURES insertSnippet 用 Fun[$1]',
+    STRUCTURES.some(s => (s.insertSnippet || '').includes('Simplify[$1]')));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
