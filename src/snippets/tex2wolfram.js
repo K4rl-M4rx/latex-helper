@@ -7,16 +7,17 @@
  *
  * 实现为分层正则 pipeline + 递归：
  * 1. normalize      去掉 \left\right、间距命令
- * 2. 结构命令       \int \sum \prod \lim \frac{d}{dx}（先提取，避免其上下标被误处理）
- * 3. 分数/根号     \frac{a}{b}、\sqrt{...}
- * 4. 函数命令      \sin x → Sin[x]（含 \sin^2 x → Sin[x]^2、\log_{2} x → Log[2, x]）
- * 5. 符号          希腊字母、\pi \infty \le \ge \neq \cdot \times \to 等
- * 6. 下标          x_1 → Subscript[x, 1]
- * 7. 幂花括号      x^{2} → x^(2)
- * 8. 隐式乘法      2x、xy、(x+1)(x-1) → 插入 *（仅无空格粘连处；Wolfram 原生支持空格乘法）
- * 9. 等号          = → ==
+ * 2. 矩阵环境      vmatrix → Det[{{...}}]；pmatrix/bmatrix → {{...}}；\det\begin{...}
+ * 3. 结构命令       \int \sum \prod \lim \frac{d}{dx}（先提取，避免其上下标被误处理）
+ * 4. 分数/根号     \frac{a}{b}、\sqrt{...}
+ * 5. 函数命令      \sin x → Sin[x]（含 \sin^2 x → Sin[x]^2、\log_{2} x → Log[2, x]）
+ * 6. 符号          希腊字母、\pi \infty \le \ge \neq \cdot \times \to 等
+ * 7. 下标          x_1 → Subscript[x, 1]
+ * 8. 幂花括号      x^{2} → x^(2)
+ * 9. 隐式乘法      2x、xy、(x+1)(x-1) → 插入 *（仅无空格粘连处；Wolfram 原生支持空格乘法）
+ * 10. 等号         = → ==
  *
- * 已知限制：矩阵/align 环境不处理、未知命令原样保留（交给 Wolfram 报错）。
+ * 已知限制：align 环境、嵌套矩阵、array 列格式不处理；未知命令原样保留。
  */
 
 /** 常见数学函数命令 → Wolfram 函数名 */
@@ -84,6 +85,56 @@ function normalize(s) {
 function unwrapParens(arg) {
     const t = arg.trim();
     return /^\([^()]*\)$/.test(t) ? t.slice(1, -1) : t;
+}
+
+/** 支持的矩阵环境（vmatrix 单独表示行列式） */
+const MATRIX_ENV_RE = 'pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|matrix';
+
+/**
+ * 矩阵环境 body → Wolfram 嵌套列表 {{a,b},{c,d}}；asDet 时外包 Det[...]。
+ * 行以 \\\\ 分隔，列以 & 分隔；单元格递归 tex2wolfram。
+ * @param {string} body
+ * @param {boolean} asDet
+ * @returns {string}
+ */
+function matrixBodyToWolfram(body, asDet) {
+    const rows = String(body)
+        .split(/\\\\/)
+        .map(r => r.trim())
+        .filter(r => r.length > 0 && !/^\\hline$/.test(r));
+    const wolframRows = rows.map(row => {
+        const cells = row.split('&').map(c => tex2wolfram(c.trim()));
+        return '{' + cells.join(',') + '}';
+    });
+    const mat = '{' + wolframRows.join(',') + '}';
+    return asDet ? 'Det[' + mat + ']' : mat;
+}
+
+/**
+ * 矩阵 / 行列式环境（须早于 \det 一般函数转换，避免 \begin 被拆散）。
+ * - \begin{vmatrix}...\end{vmatrix} → Det[{{...}}]
+ * - \det\begin{pmatrix}...\end{pmatrix} → Det[{{...}}]
+ * - \begin{pmatrix|bmatrix|matrix}...\end{...} → {{...}}
+ * @param {string} s
+ * @returns {string}
+ */
+function convertMatrices(s) {
+    // \det\begin{env}...\end{env}（含 vmatrix：\det 冗余时仍正确）
+    s = s.replace(
+        new RegExp('\\\\det\\s*\\\\begin\\{(' + MATRIX_ENV_RE + ')\\}([\\s\\S]*?)\\\\end\\{\\1\\}', 'g'),
+        (m, env, body) => matrixBodyToWolfram(body, true)
+    );
+    // 独立 vmatrix / Vmatrix → 行列式
+    s = s.replace(
+        /\\begin\{(vmatrix|Vmatrix)\}([\s\S]*?)\\end\{\1\}/g,
+        (m, env, body) => matrixBodyToWolfram(body, true)
+    );
+    // 其余矩阵环境 → 列表（不再匹配已消掉的 vmatrix）
+    s = s.replace(
+        new RegExp('\\\\begin\\{(' + MATRIX_ENV_RE + ')\\}([\\s\\S]*?)\\\\end\\{\\1\\}', 'g'),
+        (m, env, body) => matrixBodyToWolfram(body, env === 'vmatrix' || env === 'Vmatrix')
+    );
+    return s;
 }
 
 /**
@@ -260,6 +311,7 @@ function convertEquals(s) {
 function tex2wolfram(latex) {
     let s = normalize(String(latex));
     if (!s) return '';
+    s = convertMatrices(s);
     s = convertStructure(s);
     s = convertFracSqrt(s);
     s = convertFunctions(s);
@@ -271,4 +323,4 @@ function tex2wolfram(latex) {
     return s;
 }
 
-module.exports = { tex2wolfram };
+module.exports = { tex2wolfram, matrixBodyToWolfram, convertMatrices };

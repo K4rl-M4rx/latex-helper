@@ -75,6 +75,23 @@ check('x_1', tex2wolfram('x_1'), 'Subscript[x, 1]');
 check('x_{i+1}', tex2wolfram('x_{i+1}'), 'Subscript[x, i+1]');
 check('x^{2} 幂花括号', tex2wolfram('x^{2}'), 'x^(2)');
 
+// 矩阵与行列式
+check('\\begin{vmatrix}a&b\\\\c&d\\end{vmatrix}',
+    tex2wolfram('\\begin{vmatrix}a&b\\\\c&d\\end{vmatrix}'), 'Det[{{a,b},{c,d}}]');
+check('\\det\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}',
+    tex2wolfram('\\det\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}'), 'Det[{{a,b},{c,d}}]');
+check('\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix} 矩阵列表',
+    tex2wolfram('\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}'), '{{1,2},{3,4}}');
+check('\\begin{bmatrix}a&b\\\\c&d\\end{bmatrix}',
+    tex2wolfram('\\begin{bmatrix}a&b\\\\c&d\\end{bmatrix}'), '{{a,b},{c,d}}');
+check('\\det A 符号矩阵', tex2wolfram('\\det A'), 'Det[A]');
+check('vmatrix 单元格含分数',
+    tex2wolfram('\\begin{vmatrix}\\frac{1}{2}&0\\\\0&2\\end{vmatrix}'),
+    'Det[{{(1)/(2),0},{0,2}}]');
+check('vmatrix 带下标',
+    tex2wolfram('\\begin{vmatrix}s_{1}&s_{2}\\\\s_{3}&s_{4}\\end{vmatrix}'),
+    'Det[{{Subscript[s, 1],Subscript[s, 2]},{Subscript[s, 3],Subscript[s, 4]}}]');
+
 // 隐式乘法
 check('2x', tex2wolfram('2x'), '2*x');
 check('xy', tex2wolfram('xy'), 'x*y');

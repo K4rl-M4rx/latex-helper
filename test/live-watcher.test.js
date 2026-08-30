@@ -94,7 +94,7 @@ childProcess.execFile = (execPath, args, _opts, _cb) => {
     execFileCalls.push({ path: execPath, args });
 };
 
-const { LiveSnippetWatcher } = require('../src/snippets/live-watcher');
+const { LiveSnippetWatcher, matchSympyBlock } = require('../src/snippets/live-watcher');
 
 // ---- 假 editor/document ----
 function makeEditor(lines) {
@@ -116,9 +116,16 @@ function makeEditor(lines) {
             const builder = {
                 replace: (range, text) => {
                     editor.edits.push({ kind: 'replace', range, text });
-                    const line = lines[range.start.line];
-                    lines[range.start.line] = line.substring(0, range.start.character) +
-                        text + line.substring(range.end.character);
+                    if (range.start.line === range.end.line) {
+                        const line = lines[range.start.line];
+                        lines[range.start.line] = line.substring(0, range.start.character) +
+                            text + line.substring(range.end.character);
+                    } else {
+                        const before = lines[range.start.line].substring(0, range.start.character);
+                        const after = lines[range.end.line].substring(range.end.character);
+                        const merged = (before + text + after).split('\n');
+                        lines.splice(range.start.line, range.end.line - range.start.line + 1, ...merged);
+                    }
                 },
                 delete: (range) => {
                     editor.edits.push({ kind: 'delete', range });
@@ -271,6 +278,49 @@ async function main() {
             execFileCalls[0].args[0] === '-code' &&
             execFileCalls[0].args[1].includes('Collect[x*y+x^2, x]'));
         testCasBackend = 'sympy';
+    }
+
+    // 场景 9：多行 pmatrix —— 换行后仍可 ∴c 触发
+    {
+        execFileCalls = [];
+        testCasBackend = 'wolfram';
+        testSnippets = [SYMPY_SNIPPET];
+        const editor = makeEditor([
+            '\\( ∴ \\det \\begin{pmatrix}',
+            '        fs_1s_2 & f-1+(2-f)s_1^2\\\\',
+            '        -f+fs_2^2 & (2-f)s_1s_2',
+            '      \\end{pmatrix} evaluate ∴c'
+        ]);
+        vscodeStub.window.activeTextEditor = editor;
+        const watcher = new LiveSnippetWatcher();
+        const last = editor.document.lines[3];
+        await watcher.watcher(changeEvent(editor.document, [{
+            range: new Range(3, last.length - 1, 3, last.length - 1),
+            text: 'c'
+        }]));
+        check('多行 pmatrix：触发求值', execFileCalls.length === 1);
+        check('多行 pmatrix：替换为占位符',
+            editor.edits.length === 1 && editor.edits[0].text === 'SYMPY_CALCULATING');
+        check('多行 pmatrix：wolfram 收到 Det[',
+            execFileCalls.length === 1 && String(execFileCalls[0].args[1] || '').includes('Det['));
+        testCasBackend = 'sympy';
+    }
+
+    // matchSympyBlock 纯函数：跨行捕获表达式
+    {
+        const doc = makeEditor([
+            '∴ \\begin{pmatrix}',
+            'a&b\\\\',
+            'c&d',
+            '\\end{pmatrix} evaluate ∴c'
+        ]).document;
+        const hit = matchSympyBlock(doc, 3, doc.lines[3].length);
+        check('matchSympyBlock：命中多行块', Boolean(hit));
+        check('matchSympyBlock：表达式含换行与 pmatrix',
+            Boolean(hit && hit.match[1].includes('pmatrix') && hit.match[1].includes('\n')));
+        check('matchSympyBlock：命令词 evaluate', Boolean(hit && hit.match[2] === 'evaluate'));
+        check('matchSympyBlock：无 c 不命中',
+            matchSympyBlock(makeEditor(['∴ x evaluate ∴']).document, 0, '∴ x evaluate ∴'.length) === null);
     }
 
     console.log(`\n${passed} passed, ${failed} failed`);

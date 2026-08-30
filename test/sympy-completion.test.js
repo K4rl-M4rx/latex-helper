@@ -55,10 +55,13 @@ check('带参函数 8 个', FUNCTIONS.length === 8);
 check('带参含 D/Solve/Limit/Integrate/Collect',
     ['D[x]', 'Solve[x]', 'Limit[x->a]', 'Integrate[{x,a,b}]', 'Collect[x]']
         .every(l => FUNCTIONS.some(f => f.label === l)));
-check('结构模板 7 个', STRUCTURES.length === 7);
+check('结构模板 9 个', STRUCTURES.length === 9);
 check('结构模板含导数/积分/极限/求和',
     ['\\frac{d}{dx}($0)', '\\int $0 dx', '\\lim_{$1 \\to $2} $0', '\\sum_{$1=$2}^{$3} $0']
         .every(l => STRUCTURES.some(s => s.label === l)));
+check('结构模板含 vmatrix / det pmatrix',
+    STRUCTURES.some(s => s.label.includes('vmatrix')) &&
+    STRUCTURES.some(s => s.label.includes('det')));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -156,7 +156,10 @@
         },
         "latex-helper.casBackend": {
           "type": "string",
-          "enum": ["sympy", "wolfram"],
+          "enum": [
+            "sympy",
+            "wolfram"
+          ],
           "default": "sympy",
           "description": "sympy ... sympy 块（∴ ... ∴c）的求值引擎：sympy（latex2sympy2 管道）或 wolfram（wolframscript TeXForm）"
         },
@@ -174,7 +177,8 @@
     }
   },
   "scripts": {
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "clean-temp": "rm -rf temp && mkdir -p temp"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

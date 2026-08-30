@@ -8,6 +8,9 @@ node_modules/
 # 本地测试文件
 test-tex/
 
+# 编译 / 调试临时产物（公式预览、qty-debug 等）
+temp/
+
 # Claude Code / AI 工具的个人配置（如需共享请移除对应行）
 .claude/settings.json
 .claude/agents/

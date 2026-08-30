@@ -46,7 +46,9 @@ const STRUCTURES = [
     { label: '\\lim_{$1 \\to $2} $0', insertSnippet: '\\lim_{$1 \\to $2} $0' },
     { label: '\\sum_{$1=$2}^{$3} $0', insertSnippet: '\\sum_{$1=$2}^{$3} $0' },
     { label: '\\sqrt{$0}', insertSnippet: '\\sqrt{$0}' },
-    { label: '\\frac{$1}{$2}', insertSnippet: '\\frac{$1}{$2}' }
+    { label: '\\frac{$1}{$2}', insertSnippet: '\\frac{$1}{$2}' },
+    { label: '\\begin{vmatrix}...\\end{vmatrix}', insertSnippet: '\\begin{vmatrix}$1&$2\\\\$3&$4\\end{vmatrix}' },
+    { label: '\\det\\begin{pmatrix}...\\end{pmatrix}', insertSnippet: '\\det\\begin{pmatrix}$1&$2\\\\$3&$4\\end{pmatrix}' }
 ];
 
 /**

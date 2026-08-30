@@ -30,7 +30,7 @@
 
 ### 2. 实时公式计算块（`∴ ... ∴c`）
 
-在文档中直接书写 `∴ <表达式> <命令> ∴c`，输入最后一个 `c` 的瞬间，整块替换为计算结果（表达式用 LaTeX 语法，两个引擎都支持）：
+在文档中直接书写 `∴ <表达式> <命令> ∴c`，输入最后一个 `c` 的瞬间，整块替换为计算结果（表达式用 LaTeX 语法，两个引擎都支持；**表达式可换行**，适合 `pmatrix` 等多行环境）：
 
 ```
 ∴ x^2-1 factor ∴c       →  (x-1) (x+1)
@@ -39,13 +39,20 @@
 ∴ \frac{d}{dx}(x^3+x^2+1) evaluate ∴c →  3 x^2+2 x
 ∴ \int x^2 dx evaluate ∴c →  \frac{x^3}{3}
 ∴ \lim_{x \to 0} \frac{\sin x}{x} evaluate ∴c →  1
+∴ \begin{vmatrix}a&b\\c&d\end{vmatrix} evaluate ∴c →  a d-b c
+∴ \det\begin{pmatrix}1&2\\3&4\end{pmatrix} evaluate ∴c →  -2
+∴ \det \begin{pmatrix}
+  a & b \\
+  c & d
+\end{pmatrix} evaluate ∴c →  a d - b c
 ```
 
 - 命令词（表达式后、收尾 `∴` 前）：`collect <var>`、`expand`、`factor`、`simplify`、`fullsimplify`、`together`、`apart`、`cancel`、`trigreduce`、`trigexpand`、`powerexpand`、`numerical`、`solve`、`evaluate`
 - 引擎由 `latex-helper.casBackend` 切换（见[配置](#配置)）：
   - `sympy`：表达式直接用 latex2sympy2 解析
-  - `wolfram`：表达式先经内置 LaTeX → Wolfram 转换器（`\frac` `\sqrt` `\sin` `\int` `\frac{d}{dx}` `\sum` `\lim` 下标、隐式乘法等），再交给 wolframscript 求值；也兼容直接写 Wolfram 语法（`Sin[x]`、`D[...]`）。隐式乘法会保护 `Subscript`/`Sin` 等关键字：字母紧贴下标如 `fs_{2}` 先插 `*` 再保护，避免 `Subscript` 被拆成 `S*u*b*...`（曾导致 `simplify` 结果全错）
-- `∴ <expr> ∴` 定界不触发；`∴d` 后缀触发已移除，仅 `∴c` 命令触发
+  - `wolfram`：表达式先经内置 LaTeX → Wolfram 转换器（`\frac` `\sqrt` `\sin` `\int` `\frac{d}{dx}` `\sum` `\lim`、**矩阵/`\det`**、下标、隐式乘法等），再交给 wolframscript 求值；也兼容直接写 Wolfram 语法（`Sin[x]`、`D[...]`、`Det[{{a,b},{c,d}}]`）。隐式乘法会保护 `Subscript`/`Sin` 等关键字：字母紧贴下标如 `fs_{2}` 先插 `*` 再保护，避免 `Subscript` 被拆成 `S*u*b*...`（曾导致 `simplify` 结果全错）
+  - 行列式（**建议 `casBackend: wolfram`**）：`\begin{vmatrix}...\end{vmatrix}`、`\det\begin{pmatrix|bmatrix}...\end{...}` → `Det[{{...}}]`；`\begin{pmatrix}...\end{pmatrix}`  alone → `{{...}}`；`\det A` → `Det[A]`。sympy/latex2sympy2 对 vmatrix 支持不可靠
+- `∴ <expr> ∴` 定界不触发；`∴d` 后缀触发已移除，仅 **`∴c`** 命令触发（多行块也一样，最后输入 `c`）
 - 该块语法由 `latex-helper.snippets` 中的 SYMPY 条目（`SPECIAL_ACTION_SYMPY`）驱动；数学模式下输入 `lm` 可快速插入 `∴ $1 ∴` 块（snippet `lm$`）
 
 ### 3. 公式面板 / 公式浏览器
@@ -112,8 +119,11 @@
 ```bash
 npm run lint                 # ESLint
 node test/*.test.js          # 单元测试（cache/compiler/live-watcher/parser/snippets/sympy/webview）
+npm run clean-temp           # 清空项目 temp/（公式预览缓存、调试产物）
+./scripts/clean-temp.command # 同上，带确认提示（可双击）
 ```
 
+`temp/` 已在 `.gitignore` 中忽略，不入库。公式预览的增量缓存默认也在工作区 `temp/latex-helper-cache/`。
 ## 已知限制
 
 - 快捷键计算器每次调用起一个 python 进程，首次调用较慢（15s 超时）
@@ -121,3 +131,4 @@ node test/*.test.js          # 单元测试（cache/compiler/live-watcher/parser
 - 定理预览的编号从 1 起排，与原文档编号不一致（standalone 独立编译所致）
 - 批量公式编译使用 `-halt-on-error`：一条坏公式会使整批失败；失败产物见 `~/.latex-helper-last-fail/`
 - 预览侧去掉空白行只影响 standalone 编译稿，不会改写用户源文件
+- 矩阵转换不支持嵌套矩阵、`array` 列格式；行列式请用 wolfram 后端（`vmatrix` / `\det\begin{pmatrix}`）

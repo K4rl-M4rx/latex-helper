@@ -24,6 +24,63 @@ const SYMPY_PLACEHOLDER = 'SYMPY_CALCULATING';
 /** sympy 求值失败时短暂显示的文本（400ms 后删除） */
 const SYMPY_ERROR = 'SYMPY_ERROR';
 
+/** ∴ 块命令词（与 settings prefix / 补全列表对齐） */
+const SYMPY_OP_ALT =
+    'collect \\w+|expand|factor|simplify|fullsimplify|together|apart|cancel|trigreduce|trigexpand|powerexpand|numerical|solve|evaluate';
+
+/**
+ * 跨行匹配 ∴ 块（表达式内禁止再出现 ∴；允许换行）。
+ * 捕获组与历史单行 prefix 一致：1=expr，2=命令词，3=fnName，4=fnArgs。
+ * 用 (?!∴) 避免把更早的完整块吞进当前表达式。
+ */
+const SYMPY_BLOCK_RE = new RegExp(
+    '∴ ?((?:(?!∴)[\\s\\S])+?) ?(?:(' + SYMPY_OP_ALT + ')|([A-Za-z]+)\\[([^\\]]*)\\]) ?∴ ?c$'
+);
+
+/** 向前最多看多少行找块起点（pmatrix 等常见不会超过这个） */
+const SYMPY_LOOKBACK_LINES = 80;
+
+/**
+ * 从光标位置向前取文本，匹配以 ∴c 结尾的计算块（支持换行）。
+ * @param {vscode.TextDocument} document
+ * @param {number} endLine
+ * @param {number} endChar 该行截止列（不含之后的字符）
+ * @returns {{ match: RegExpExecArray, range: vscode.Range } | null}
+ */
+function matchSympyBlock(document, endLine, endChar) {
+    const startLine = Math.max(0, endLine - SYMPY_LOOKBACK_LINES);
+    /** @type {Array<{ line: number, offset: number }>} */
+    const lineStarts = [];
+    let text = '';
+    for (let i = startLine; i <= endLine; i++) {
+        lineStarts.push({ line: i, offset: text.length });
+        const lineText = document.lineAt(i).text;
+        text += i === endLine ? lineText.substring(0, endChar) : lineText;
+        if (i < endLine) text += '\n';
+    }
+    const match = SYMPY_BLOCK_RE.exec(text);
+    if (!match) return null;
+
+    const absStart = match.index;
+    const absEnd = match.index + match[0].length;
+    /**
+     * @param {number} off
+     * @returns {vscode.Position}
+     */
+    function offsetToPos(off) {
+        for (let j = lineStarts.length - 1; j >= 0; j--) {
+            if (off >= lineStarts[j].offset) {
+                return new vscode.Position(lineStarts[j].line, off - lineStarts[j].offset);
+            }
+        }
+        return new vscode.Position(startLine, 0);
+    }
+    return {
+        match,
+        range: new vscode.Range(offsetToPos(absStart), offsetToPos(absEnd))
+    };
+}
+
 /**
  * 解析 SYMPY 块内表达式与可选操作词（表达式里直接传参）：
  * - `expr`                          → evaluate（默认）
@@ -295,29 +352,30 @@ class LiveSnippetWatcher {
         if (!editor) return undefined;
 
         const upto = change.range.start.character + change.text.length + offset;
+
+        // SPECIAL_ACTION_SYMPY：跨行匹配（pmatrix 等常换行）；不走单行 prefix
+        if (snippet.specialAction === 'sympy') {
+            const hit = matchSympyBlock(editor.document, line.lineNumber, upto);
+            if (!hit) return undefined;
+            const placeholder = this.execSympy(hit.match);
+            this.isApplyingEdit = true;
+            try {
+                await editor.edit(editBuilder => {
+                    editBuilder.replace(hit.range, placeholder);
+                }, { undoStopBefore: true, undoStopAfter: true });
+                // 多行替换后列偏移难以精确跟踪；返回 0 避免后续 snippet 错位
+                // （同一次击键通常只有 SYMPY 命中）
+                return 0;
+            } finally {
+                this.isApplyingEdit = false;
+            }
+        }
+
         const match = snippet.prefixRegex.exec(line.text.substring(0, upto));
         if (!match) return undefined;
 
         // SPECIAL_ACTION_BREAK：熔断哨兵（无文本替换）
         if (snippet.specialAction === 'break') return 'break';
-
-        // SPECIAL_ACTION_SYMPY：先把匹配文本替换为占位符，异步求值后替换为结果
-        if (snippet.specialAction === 'sympy') {
-            const sympyRange = new vscode.Range(
-                new vscode.Position(line.lineNumber, match.index),
-                new vscode.Position(line.lineNumber, match.index + match[0].length)
-            );
-            const placeholder = this.execSympy(match);
-            this.isApplyingEdit = true;
-            try {
-                await editor.edit(editBuilder => {
-                    editBuilder.replace(sympyRange, placeholder);
-                }, { undoStopBefore: true, undoStopAfter: true });
-                return placeholder.length - match[0].length;
-            } finally {
-                this.isApplyingEdit = false;
-            }
-        }
 
         // SPECIAL_ACTION_FRACTION：替换范围向前延伸到配对开括号，强制 insertSnippet
         // （replacement 含 $1 tabstop；原插件因 body 无 $$N 走纯文本会丢失 tabstop，
@@ -391,10 +449,10 @@ class LiveSnippetWatcher {
      * @returns {string} 占位符文本
      */
     execSympy(match) {
-        // 触发解析（prefix 正则 `∴ ?(.+?) ?(?:<命令词>|([A-Za-z]+)\[([^\]]*)\]) ?∴ ?c$`）：
+        // 触发解析（跨行块由 matchSympyBlock；捕获组同前）：
         // match[1] = 表达式；match[2] = 命令词（collect x / expand / ... / evaluate）
         // match[3]/match[4] = 带参 Wolfram 函数形式 fn[args]（如 Collect[x]、D[x]、Solve[x]）
-        // 仅 ∴c 命令触发；∴ 定界与 ∴d 后缀均不触发（settings prefix 无对应分支）
+        // 仅 ∴c 命令触发；∴ 定界与 ∴d 后缀均不触发
         const expr = match[1].trim();
         let op;
         let arg;
@@ -508,6 +566,8 @@ module.exports = {
     parseOpWord,
     buildSympyScript,
     buildWolframScript,
+    matchSympyBlock,
+    SYMPY_BLOCK_RE,
     SYMPY_PLACEHOLDER,
     SYMPY_ERROR
 };
