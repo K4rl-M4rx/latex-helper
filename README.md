@@ -58,6 +58,8 @@
 - **定理预览**：定理卡片折叠时显示一行编译预览（批量编译，坏定理单条隔离），点击展开懒编译单条
 - **Group By 树**：公式 / 定理视图分别按 Section / Subsection / Type 分类
 - 已解析环境：`equation`、`align`、`gather`、`multline`、`flalign`、`eqnarray`、`array` 及 starred 版本；定理类环境内置 `theorem/lemma/...` + 自定义 `\newtheorem`
+- **physics `\qty` 兼容**：预览编译前去掉公式 body 中的纯空白行（TeX 视为 `\par`，会触发 `Paragraph ended before \@quantity was complete`）；若同时加载 physics + siunitx，自动注入 `\RenewCommandCopy\qty\SI`（运行时 `\IfPackageLoadedTF`，兼容 `\input` 间接加载）
+- **编译失败留档**：失败时把 `formulas.tex` / `formulas.log` 写到 `~/.latex-helper-last-fail/`，弹窗可一键打开
 
 ### 4. Snippet 补全与实时展开
 
@@ -117,3 +119,5 @@ node test/*.test.js          # 单元测试（cache/compiler/live-watcher/parser
 - 快捷键计算器每次调用起一个 python 进程，首次调用较慢（15s 超时）
 - wolframscript 引擎启动较慢（块求值超时放宽到 30s）
 - 定理预览的编号从 1 起排，与原文档编号不一致（standalone 独立编译所致）
+- 批量公式编译使用 `-halt-on-error`：一条坏公式会使整批失败；失败产物见 `~/.latex-helper-last-fail/`
+- 预览侧去掉空白行只影响 standalone 编译稿，不会改写用户源文件

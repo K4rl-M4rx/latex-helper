@@ -53,6 +53,74 @@ function checkTool(name) {
 }
 
 /**
+ * preamble 是否加载了指定宏包（支持 \usepackage{a,b} 合并写法）。
+ * @param {string} preamble
+ * @param {string} packageName
+ * @returns {boolean}
+ */
+function preambleUsesPackage(preamble, packageName) {
+    const re = /\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{([^}]*)\}/g;
+    let match;
+    while ((match = re.exec(preamble)) !== null) {
+        const names = match[1].split(',').map(s => s.trim());
+        if (names.includes(packageName)) return true;
+    }
+    return false;
+}
+
+/**
+ * 运行时修复：不依赖字符串扫描 \usepackage。
+ * 宏包常通过 \input{...} 间接加载，静态检测会漏掉，导致仍走 physics 的 \@quantity，
+ * 并在 \qty{数}<空行>{单位} 时报 Paragraph ended before \@quantity was complete。
+ * \IfPackageLoadedTF 在 \begin{document} 时判断，\input 已展开。
+ */
+const QTY_SIUNITX_FIX = [
+    '% latex-helper: physics+siunitx \\qty 冲突修复（siunitx 官方写法）',
+    '\\AtBeginDocument{%',
+    '  \\IfPackageLoadedTF{physics}{%',
+    '    \\IfPackageLoadedTF{siunitx}{%',
+    '      \\RenewCommandCopy\\qty\\SI',
+    '    }{}%',
+    '  }{}%',
+    '}'
+].join('\n');
+
+/**
+ * 注入 physics/siunitx 的 \\qty 运行时兼容修复。
+ * 无条件注入（块内自带包检测）；若 preamble 已含同类 RenewCommandCopy 则跳过。
+ * @param {string} preamble
+ * @returns {string}
+ */
+function ensureQtyCompatibility(preamble) {
+    if (/\\RenewCommandCopy\s*\\qty\s*\\SI/.test(preamble) ||
+        /\\let\s*\\qty\s*\\SI/.test(preamble)) {
+        return preamble;
+    }
+    return preamble.trimEnd() + '\n' + QTY_SIUNITX_FIX + '\n';
+}
+
+/**
+ * 去掉公式 body 中的「纯空白行」。
+ * TeX 把空行（含仅含空格/制表符的行）当成 \\par；equation/align 内非法，
+ * 且 physics 的 \\qty{...}/\\@quantity 参数不容 \\par，会报
+ * Paragraph ended before \\@quantity was complete。
+ * 论文里常见写法：\\qty 参数中间夹了只含空格/制表符的空行。
+ * @param {string} body
+ * @returns {string}
+ */
+function sanitizeFormulaBody(body) {
+    return body
+        .split('\n')
+        .filter(line => line.trim() !== '')
+        .join('\n');
+}
+
+/** @deprecated 保留别名；请用 sanitizeFormulaBody */
+function normalizeQtyBlankLines(body) {
+    return sanitizeFormulaBody(body);
+}
+
+/**
  * 构建 standalone LaTeX 文档内容。
  * @param {string} preamble
  * @param {Array<{label: string, body: string}>} formulas
@@ -60,12 +128,13 @@ function checkTool(name) {
  */
 function buildStandaloneDoc(preamble, formulas) {
     const formulaBlocks = formulas.map(f =>
-        `\\begin{minipage}{0.95\\textwidth}\n${f.body}\n\\end{minipage}`
+        `\\begin{minipage}{0.95\\textwidth}\n${sanitizeFormulaBody(f.body)}\n\\end{minipage}`
     ).join('\n');
 
     // 剥掉用户 preamble 中的 \documentclass 行，用 standalone 替代
-    const cleanedPreamble = preamble
-        .replace(/\\documentclass(?:\[.*?\]|\*)?\{[^}]*\}\s*\n?/g, '');
+    const cleanedPreamble = ensureQtyCompatibility(
+        preamble.replace(/\\documentclass(?:\[.*?\]|\*)?\{[^}]*\}\s*\n?/g, '')
+    );
 
     return [
         '\\documentclass[multi={minipage},border=2pt,preview]{standalone}',
@@ -230,6 +299,40 @@ function getTempBaseDir() {
 }
 
 /**
+ * 编译失败时把 formulas.tex / .log 拷到固定目录（用户主目录），
+ * 不依赖当前工作区路径——工作区 temp/ 常被找错或根本没有工作区。
+ * @param {string} workDir
+ * @returns {string|null} 保留目录路径；失败则 null
+ */
+function preserveFailedCompile(workDir) {
+    try {
+        const dest = path.join(os.homedir(), '.latex-helper-last-fail');
+        fs.rmSync(dest, { recursive: true, force: true });
+        fs.mkdirSync(dest, { recursive: true });
+        let copied = 0;
+        for (const name of ['formulas.tex', 'formulas.log']) {
+            const src = path.join(workDir, name);
+            if (fs.existsSync(src)) {
+                fs.copyFileSync(src, path.join(dest, name));
+                copied++;
+            }
+        }
+        // 顺带写一份到工作区 temp/（若有），方便在项目里搜
+        try {
+            const wsBase = getTempBaseDir();
+            if (wsBase !== os.tmpdir()) {
+                const wsDest = path.join(wsBase, 'latex-helper-last-fail');
+                fs.rmSync(wsDest, { recursive: true, force: true });
+                fs.cpSync(dest, wsDest, { recursive: true });
+            }
+        } catch { /* 工作区副本可选 */ }
+        return copied > 0 ? dest : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * 编译公式列表为 SVG。
  * @param {string} preamble
  * @param {Array<{label: string, body: string}>} formulas
@@ -248,6 +351,12 @@ async function compileFormulas(preamble, formulas) {
             label: f.label,
             svg: svgs[i] || ''
         }));
+    } catch (err) {
+        const failDir = preserveFailedCompile(workDir);
+        if (failDir) {
+            err.message = `${err.message}\n(see ${failDir}/formulas.tex)`;
+        }
+        throw err;
     } finally {
         // 清理临时文件
         try {
@@ -256,4 +365,15 @@ async function compileFormulas(preamble, formulas) {
     }
 }
 
-module.exports = { checkTool, buildStandaloneDoc, compileFormulas, ensureSvgSize, namespaceSvgIds, svgHash };
+module.exports = {
+    checkTool,
+    buildStandaloneDoc,
+    compileFormulas,
+    ensureQtyCompatibility,
+    normalizeQtyBlankLines,
+    sanitizeFormulaBody,
+    ensureSvgSize,
+    namespaceSvgIds,
+    preambleUsesPackage,
+    svgHash
+};

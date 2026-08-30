@@ -501,7 +501,15 @@ async function refreshFormulas(document) {
         // 用户显式切换时 setGroupMode 命令已单独 sendMessage（关闭时排队、ready 重放）。
     } catch (err) {
         console.error('LaTeX Helper: formula refresh failed', err);
-        vscode.window.showErrorMessage(`LaTeX Helper: ${err.message}`);
+        const failTex = path.join(require('os').homedir(), '.latex-helper-last-fail', 'formulas.tex');
+        const pick = await vscode.window.showErrorMessage(
+            `LaTeX Helper: ${err.message}`,
+            ...(fs.existsSync(failTex) ? ['Open formulas.tex'] : [])
+        );
+        if (pick === 'Open formulas.tex') {
+            const doc = await vscode.workspace.openTextDocument(failTex);
+            await vscode.window.showTextDocument(doc);
+        }
         formulaBrowser.sendMessage({ type: 'refreshStatus', refreshing: false, message: 'Failed' });
     }
 }

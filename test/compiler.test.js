@@ -18,7 +18,16 @@ Module._cache['vscode-stub'] = {
     }
 };
 
-const { ensureSvgSize, namespaceSvgIds, svgHash } = require('../src/formula/compiler');
+const {
+    ensureSvgSize,
+    namespaceSvgIds,
+    svgHash,
+    ensureQtyCompatibility,
+    normalizeQtyBlankLines,
+    sanitizeFormulaBody,
+    preambleUsesPackage,
+    buildStandaloneDoc
+} = require('../src/formula/compiler');
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +88,41 @@ check('svgHash 以字母开头（合法 XML id）', /^[a-z]/.test(svgHash('abc')
 
 // 空输入不炸
 check('namespace 空字符串原样返回', namespaceSvgIds('', 'p-') === '');
+
+console.log('== ensureQtyCompatibility ==');
+
+const physSiunitx = [
+    '\\usepackage{amsmath}',
+    '\\usepackage{physics}',
+    '\\usepackage{siunitx}'
+].join('\n');
+check('合并 usepackage 识别 physics', preambleUsesPackage('\\usepackage{amsmath,physics}', 'physics'));
+check('合并 usepackage 识别 siunitx', preambleUsesPackage('\\usepackage{amsmath,siunitx}', 'siunitx'));
+// 改为无条件注入：\input 加载宏包时静态扫描会漏，必须靠 \\IfPackageLoadedTF
+check('空 preamble 也注入运行时 fix', ensureQtyCompatibility('').includes('\\IfPackageLoadedTF{physics}'));
+check('仅 siunitx 也注入（块内自检，无 physics 时为 no-op）',
+    ensureQtyCompatibility('\\usepackage{siunitx}').includes('\\RenewCommandCopy\\qty\\SI'));
+check('physics+siunitx 注入 IfPackageLoadedTF',
+    ensureQtyCompatibility(physSiunitx).includes('\\IfPackageLoadedTF{siunitx}'));
+check('已有 RenewCommandCopy 不重复注入',
+    ensureQtyCompatibility(physSiunitx + '\n\\AtBeginDocument{\\RenewCommandCopy\\qty\\SI}\n')
+        .split('RenewCommandCopy').length === 2);
+
+console.log('== sanitizeFormulaBody ==');
+const withBlank = '\\qty{5}\n\n{\\metre}';
+check('去掉空行', sanitizeFormulaBody(withBlank) === '\\qty{5}\n{\\metre}');
+check('去掉仅空白行（physics \\qty 内常见）',
+    sanitizeFormulaBody('\\qty{a \\\\\n\t\t   \n b}') === '\\qty{a \\\\\n b}');
+check('无空行时原样', sanitizeFormulaBody('\\qty{5}{\\metre}') === '\\qty{5}{\\metre}');
+check('normalizeQtyBlankLines 同 sanitize', normalizeQtyBlankLines(withBlank) === sanitizeFormulaBody(withBlank));
+
+console.log('== buildStandaloneDoc qty fix ==');
+const doc = buildStandaloneDoc(
+    '\\documentclass{article}\n\\input{pkgs.tex}\n',
+    [{ label: 'eq:1', body: '\\begin{equation}\\label{eq:1}\\qty{5}\n\t  \n{\\metre}\\end{equation}' }]
+);
+check('standalone 含运行时 IfPackageLoadedTF（覆盖 \\input）', doc.includes('\\IfPackageLoadedTF{physics}'));
+check('standalone 去掉空白行', doc.includes('\\qty{5}\n{\\metre}') && !/\\qty\{5\}\n[ \t]*\n\{/.test(doc));
 
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
