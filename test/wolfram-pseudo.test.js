@@ -49,8 +49,12 @@ check('嵌套 Det', compileWolframPseudo('Simplify@Det[{{1,2},{3,4}}]'),
     'Simplify[Det[{{1,2},{3,4}}]]');
 check('变量头不改写', compileWolframPseudo('f@x'), 'f[x]');
 check('参数内 @ 仍复合', compileWolframPseudo('Simplify[a@b]'), 'Simplify[a[b]]');
-check('分参为 @ 时不当复合', compileWolframPseudo('Collect[a @ b @ c]', { argSeparator: '@' }),
+check('分参用 ;', compileWolframPseudo('Collect[a ; b ; c]', { argSeparator: ';' }),
     'Collect[a, b, c]');
+check('禁止分参为 @（回退逗号，@ 仍复合）',
+    compileWolframPseudo('Collect[a @ b]', { argSeparator: '@' }),
+    'Collect[a[b]]');
+check('normalizeArgSeparator 拒绝 @', require('../src/snippets/wolfram-pseudo').normalizeArgSeparator('@'), ',');
 check('@@ 原样透传（Apply，暂不改写）', compileWolframPseudo('f@@{a, b}'), 'f@@{a, b}');
 
 console.log('== looksLikeLatex / splitTopLevelArgs ==');
@@ -60,8 +64,10 @@ check('已是 Fun[…] 不是 latex', !looksLikeLatex('Sin[x]'));
 check('顶层逗号拆分', JSON.stringify(splitTopLevelArgs('a, b, c')), JSON.stringify(['a', 'b', 'c']));
 check('嵌套方括号内逗号不拆', JSON.stringify(splitTopLevelArgs('Det[{{a,b},{c,d}}], x')),
     JSON.stringify(['Det[{{a,b},{c,d}}]', 'x']));
-check('@ 分界', JSON.stringify(splitTopLevelArgs('a @ b @ c', '@')), JSON.stringify(['a', 'b', 'c']));
-check('@ 不拆括号内', JSON.stringify(splitTopLevelArgs('F[a@b] @ c', '@')), JSON.stringify(['F[a@b]', 'c']));
+check('; 分界', JSON.stringify(splitTopLevelArgs('a ; b ; c', ';')), JSON.stringify(['a', 'b', 'c']));
+check('; 不拆括号内', JSON.stringify(splitTopLevelArgs('F[a;b] ; c', ';')), JSON.stringify(['F[a;b]', 'c']));
+check('splitTopLevelArgs(@) 回退逗号', JSON.stringify(splitTopLevelArgs('a @ b', '@')),
+    JSON.stringify(['a @ b']));
 
 console.log('== compileWolframPseudo ==');
 check('大小写不敏感', compileWolframPseudo('simplify[x^2-1]'), 'Simplify[x^2-1]');
@@ -70,7 +76,7 @@ check('多参数 Collect', compileWolframPseudo('Collect[x*y+x^2, x]'), 'Collect
 check('Collect 第三参裸 simplify', compileWolframPseudo('Collect[x*y+x^2, x, simplify]'),
     'Collect[x*y+x^2, x, Simplify]');
 check('裸变量 x 不改写', compileWolframPseudo('Collect[eq, x, Simplify]'), 'Collect[eq, x, Simplify]');
-check('@ 分界 + 别名', compileWolframPseudo('Collect[x*y+x^2 @ x @ simplify]', { argSeparator: '@' }),
+check('; 分界 + 别名', compileWolframPseudo('Collect[x*y+x^2 ; x ; simplify]', { argSeparator: ';' }),
     'Collect[x*y+x^2, x, Simplify]');
 check('Solve 单 = → ==', compileWolframPseudo('Solve[x^2=4, x]'), 'Solve[x^2==4, x]');
 check('叶子 LaTeX frac', compileWolframPseudo('Together[\\frac{1}{x}+\\frac{1}{x+1}]').startsWith('Together['));

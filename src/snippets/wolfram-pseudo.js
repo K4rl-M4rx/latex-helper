@@ -3,7 +3,7 @@
  * - 函数名不区分大小写：一律 toLowerCase 后查规范名表（见 FN_ALIASES）
  * - 支持嵌套 Fun1[Fun2[…]] 与多参数；顶层分界符可配（默认 ,）
  * - Prefix `@` 复合：Simplify @ Expand @ expr → Simplify[Expand[expr]]（右结合；
- *   与 wolframArgSeparator=@ 互斥，分参优先）
+ *   wolframArgSeparator 禁止设为 `@`，以免与复合冲突）
  * - 叶子：LaTeX → tex2wolfram；裸函数名走同一张表（simplify → Simplify，不改写变量 x）
  *
  * 为何必须有词表、而不能「任意单词小写后自动对齐 Wolfram」：
@@ -160,7 +160,10 @@ function normalizeBareSymbol(name) {
  */
 function normalizeArgSeparator(sep) {
     const s = String(sep == null ? ',' : sep);
-    return s.length > 0 ? s : ',';
+    if (!s) return ',';
+    // `@` 保留给 Prefix 复合（Simplify@x），禁止用作参数分界
+    if (s === '@' || s.includes('@')) return ',';
+    return s;
 }
 
 /**
@@ -235,7 +238,6 @@ function splitTopLevelBy(s, sep, opts) {
 
 /**
  * 顶层 Prefix `@` 分段：f @ g @ x → ['f','g','x']（右结合编成 f[g[x]]）。
- * 与参数分界符 `@` 互斥：argSeparator 为 `@` 时不启用。
  * @param {string} s
  * @returns {string[] | null} 无 Prefix `@` 时返回 null
  */
@@ -303,17 +305,14 @@ function compileWolframPseudo(input, options) {
     const argSeparator = normalizeArgSeparator(options && options.argSeparator);
 
     // Prefix `@`：Simplify @ Expand @ expr → Simplify[Expand[expr]]（右结合）
-    // 若用户把参数分界符设成 `@`，则让位给分参，不再当复合算子
-    if (argSeparator !== '@') {
-        const atParts = splitPrefixAt(s);
-        if (atParts) {
-            let acc = compileWolframPseudo(atParts[atParts.length - 1], options);
-            for (let i = atParts.length - 2; i >= 0; i--) {
-                const head = compileWolframPseudo(atParts[i], options);
-                acc = applyPrefix(head, acc);
-            }
-            return acc;
+    const atParts = splitPrefixAt(s);
+    if (atParts) {
+        let acc = compileWolframPseudo(atParts[atParts.length - 1], options);
+        for (let i = atParts.length - 2; i >= 0; i--) {
+            const head = compileWolframPseudo(atParts[i], options);
+            acc = applyPrefix(head, acc);
         }
+        return acc;
     }
 
     const nameMatch = /^([A-Za-z][A-Za-z0-9]*)\s*\[/.exec(s);
