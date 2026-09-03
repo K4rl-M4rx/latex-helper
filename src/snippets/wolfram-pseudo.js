@@ -1,38 +1,80 @@
 /**
  * Wolfram 伪代码编译：∴ Function[args] ∴c 块用。
- * - 函数名不区分大小写，映射到合法 Wolfram 符号
+ * - 函数名不区分大小写：一律 toLowerCase 后查规范名表（见 FN_ALIASES）
  * - 支持嵌套 Fun1[Fun2[…]] 与多参数；顶层分界符可配（默认 ,）
- * - 叶子：LaTeX → tex2wolfram；裸函数名走别名表（simplify → Simplify，不改写变量 x）
+ * - 叶子：LaTeX → tex2wolfram；裸函数名走同一张表（simplify → Simplify，不改写变量 x）
+ *
+ * 为何必须有词表、而不能「任意单词小写后自动对齐 Wolfram」：
+ * Wolfram 符号是 CamelCase（ReplaceAll、FullSimplify），从小写 replaceall 无法唯一还原
+ * 中间大写位置；正确做法正是「小写键 → 规范拼写」字典。完整 System`* 有数千个，
+ * 此处维护 CAS 常用子集；未命中时只能做弱回退（首字母大写），多驼峰名会错。
  */
 
 const { tex2wolfram } = require('./tex2wolfram');
 
 /**
- * 常用别名 → 规范 Wolfram 名（键一律小写）。
- * 未列出的调用名：首字母大写（fooBar → FooBar；D → D）。
+ * 小写键 → 规范 Wolfram 符号（大小写不敏感识别的唯一可靠来源）。
+ * 含多驼峰名（replaceall → ReplaceAll）与单节名（sin → Sin）。
  */
 const FN_ALIASES = {
+    // 化简 / 展开
     simplify: 'Simplify',
     fullsimplify: 'FullSimplify',
     expand: 'Expand',
+    expandall: 'ExpandAll',
     factor: 'Factor',
+    factorlist: 'FactorList',
     together: 'Together',
     apart: 'Apart',
     cancel: 'Cancel',
+    complexexpand: 'ComplexExpand',
     trigreduce: 'TrigReduce',
     trigexpand: 'TrigExpand',
+    trigtoexp: 'TrigToExp',
+    exptotrig: 'ExpToTrig',
     powerexpand: 'PowerExpand',
-    numerical: 'N',
-    n: 'N',
+    powersimplify: 'PowerExpand',
+    // 替换（代入请用 ReplaceAll；Replace 默认只匹配整式）
+    replace: 'Replace',
+    replaceall: 'ReplaceAll',
+    replacerepeated: 'ReplaceRepeated',
+    // 求解 / 微积分
     solve: 'Solve',
-    collect: 'Collect',
-    det: 'Det',
-    tr: 'Tr',
+    nsolve: 'NSolve',
+    reduce: 'Reduce',
+    findroot: 'FindRoot',
+    dsolve: 'DSolve',
     integrate: 'Integrate',
+    nintegrate: 'NIntegrate',
     sum: 'Sum',
+    nsum: 'NSum',
     product: 'Product',
     limit: 'Limit',
+    series: 'Series',
     d: 'D',
+    dt: 'Dt',
+    // 矩阵 / 线性
+    det: 'Det',
+    tr: 'Tr',
+    transpose: 'Transpose',
+    inverse: 'Inverse',
+    rowreduce: 'RowReduce',
+    nullspace: 'NullSpace',
+    eigenvalues: 'Eigenvalues',
+    eigenvectors: 'Eigenvectors',
+    eigensystem: 'Eigensystem',
+    matrixrank: 'MatrixRank',
+    matrixpower: 'MatrixPower',
+    identitymatrix: 'IdentityMatrix',
+    // 收集 / 多项式
+    collect: 'Collect',
+    coefficient: 'Coefficient',
+    coefficientlist: 'CoefficientList',
+    exponent: 'Exponent',
+    variables: 'Variables',
+    polynomialgcd: 'PolynomialGCD',
+    polynomiallcm: 'PolynomialLCM',
+    // 初等
     abs: 'Abs',
     sqrt: 'Sqrt',
     log: 'Log',
@@ -41,8 +83,44 @@ const FN_ALIASES = {
     sin: 'Sin',
     cos: 'Cos',
     tan: 'Tan',
+    cot: 'Cot',
+    sec: 'Sec',
+    csc: 'Csc',
+    arcsin: 'ArcSin',
+    arccos: 'ArcCos',
+    arctan: 'ArcTan',
+    sinh: 'Sinh',
+    cosh: 'Cosh',
+    tanh: 'Tanh',
+    // 其它常用
+    numerical: 'N',
+    n: 'N',
     evaluate: 'Evaluate',
-    identity: 'Identity'
+    identity: 'Identity',
+    complex: 'Complex',
+    conjugate: 'Conjugate',
+    re: 'Re',
+    im: 'Im',
+    arg: 'Arg',
+    floor: 'Floor',
+    ceiling: 'Ceiling',
+    round: 'Round',
+    min: 'Min',
+    max: 'Max',
+    total: 'Total',
+    mean: 'Mean',
+    cross: 'Cross',
+    dot: 'Dot',
+    norm: 'Norm',
+    normalize: 'Normalize',
+    assume: 'Assuming',
+    assuming: 'Assuming',
+    refine: 'Refine',
+    possiblezeroq: 'PossibleZeroQ',
+    element: 'Element',
+    not: 'Not',
+    and: 'And',
+    or: 'Or'
 };
 
 /**
@@ -52,10 +130,14 @@ const FN_ALIASES = {
 function normalizeFnName(name) {
     const raw = String(name || '').trim();
     if (!raw) return raw;
+    // 核心：任意大小写 → 小写键查表 → 规范 CamelCase
     const mapped = FN_ALIASES[raw.toLowerCase()];
     if (mapped) return mapped;
-    // 已是全大写短名（如 D、N、GCD）保持；否则首字母大写
+    // 已是全大写短名（如 D、N、GCD）保持
     if (/^[A-Z0-9]+$/.test(raw) && raw.length <= 4) return raw;
+    // 用户已写成内部含大写的 CamelCase（如 MyFunc）且不在表内：原样信任
+    if (/[A-Z]/.test(raw.slice(1))) return raw;
+    // 弱回退：仅首字母大写（对 FullSimplify / ReplaceAll 这类会错，故应扩表）
     return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 

@@ -34,7 +34,12 @@ check('Det → Det', normalizeFnName('Det'), 'Det');
 check('det → Det', normalizeFnName('det'), 'Det');
 check('D 保持', normalizeFnName('D'), 'D');
 check('numerical → N', normalizeFnName('numerical'), 'N');
-check('未知名首字母大写', normalizeFnName('fooBar'), 'FooBar');
+check('replaceall → ReplaceAll', normalizeFnName('replaceall'), 'ReplaceAll');
+check('ReplaceAll 保持', normalizeFnName('ReplaceAll'), 'ReplaceAll');
+check('fullsimplify → FullSimplify', normalizeFnName('fullsimplify'), 'FullSimplify');
+check('未知名首字母大写', normalizeFnName('foobar'), 'Foobar');
+check('未知名已有驼峰保持', normalizeFnName('MyFunc'), 'MyFunc');
+check('replaceall 编译', compileWolframPseudo('replaceall[x, x->1]'), 'ReplaceAll[x, x->1]');
 
 console.log('== looksLikeLatex / splitTopLevelArgs ==');
 check('frac 是 latex', looksLikeLatex('\\frac{1}{x}'));
