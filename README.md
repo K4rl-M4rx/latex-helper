@@ -34,12 +34,12 @@
 
 `∴` 块不再使用「表达式 + 尾部命令词」（如 `∴ x^2-1 factor ∴c`），而是把块内正文当成**缩小版的 Wolfram 语言**：
 
-1. **外层是算子，内层是对象**：写成 `Fun[args]` / `Fun1[Fun2[…]]`，嵌套即复合变换（例如先求行列式再化简：`Simplify[Det[…]]`）。
-2. **函数名大小写不敏感，语义对齐 Wolfram**：`simplify` / `Simplify` / `SIMPLIFY` 都归一成合法符号；裸参数里的别名同样归一（`Collect[eq, x, simplify]` → 第三参 `Simplify`），但**不会**把变量 `x` 改成 `X`。
+1. **外层是算子，内层是对象**：写成 `Fun[args]` / `Fun1[Fun2[…]]`，嵌套即复合变换（例如先求行列式再化简：`Simplify[Det[…]]`）。也可用 Prefix **`@`**：`Simplify @ Det[…]`（右结合，同 Wolfram）。
+2. **函数名大小写不敏感，语义对齐 Wolfram**：`simplify` / `Simplify` / `SIMPLIFY` 都归一成合法符号；裸参数里的别名同样归一（`Collect[eq, x, simplify]` → 第三参 `Simplify`），但**不会**把变量 `x` 改成 `X`。多驼峰名靠别名表（`replaceall` → `ReplaceAll`）。
 3. **叶子允许混写 LaTeX**：矩阵、`\frac`、下标等仍按 TeX 写在参数里，由内置 `tex2wolfram` 转成 Wolfram 再求值；已是 `Sin[x]`、`{{a,b},{c,d}}` 的则原样保留。
 4. **参数可携带函数本身**：与 Wolfram 一致，例如对系数做化简用三参  
    `Collect[expr, x, Simplify]`（第二参是变量，第三参是施加于系数的头）。
-5. **分界默认逗号，可配置**：顶层用 `,` 拆参（`[]`/`()`/`{}` 内不拆）；若 TeX 稿里逗号碍眼，可设 `latex-helper.wolframArgSeparator`（如 `@`），编译输出给引擎时仍变成 Wolfram 逗号。
+5. **分界默认逗号，可配置**：顶层用 `,` 拆参（`[]`/`()`/`{}` 内不拆）；若设 `wolframArgSeparator` 为 `@`，则 `@` **只分参、不再表示 Prefix 复合**（建议分参用 `;`，把 `@` 留给复合）。
 6. **触发仍是 `∴c`**：写完伪代码后输入收尾的 `c`，整块同步换成占位符，再异步换成 TeXForm 结果。引擎固定为 **wolframscript**（`casBackend: sympy` 对 `∴` 已弃用）。
 
 #### 示例
@@ -53,7 +53,10 @@
 ∴ Det[\begin{vmatrix}a&b\\c&d\end{vmatrix}] ∴c
 ∴ Simplify[Det[\begin{pmatrix}1&2\\3&4\end{pmatrix}]] ∴c
 ∴ Collect[x y + x^2, x, Simplify] ∴c
-∴ Collect[x y + x^2 @ x @ simplify] ∴c   （若 wolframArgSeparator 为 @）
+∴ Collect[x y + x^2 @ x @ simplify] ∴c   （若 wolframArgSeparator 为 @；此时 @ 不再表示复合）
+∴ Simplify @ Expand @ (x+1)^2 ∴c
+∴ Simplify @ Det[\begin{pmatrix}1&2\\3&4\end{pmatrix}] ∴c
+∴ replaceall[expr, s_2 -> Sqrt[1-s_3^2-s_1^2]] ∴c
 ```
 
 多行 `pmatrix` 等也可写在同一 `∴ … ∴c` 内。补全在 `∴` 后会提示 `Fun[$1]` 模板。
@@ -103,7 +106,7 @@
 | `latex-helper.casBackend` | `wolfram` | `∴` 块固定 wolfram；`sympy` 选项已弃用（忽略）。选区快捷键仍用 python |
 | `latex-helper.sympyPythonPath` | `python3` | 带 sympy 的 python3 路径（仅选区快捷键计算器） |
 | `latex-helper.wolframPath` | `wolframscript` | wolframscript 可执行文件路径（`∴` 块与 Wolfram Engine） |
-| `latex-helper.wolframArgSeparator` | `,` | `∴ Fun[…]` 顶层参数分界符（默认逗号；可改为 `@`、`;` 等）。只在 `[]`/`()`/`{}` 外层拆分；交给 Wolfram 时仍写成逗号 |
+| `latex-helper.wolframArgSeparator` | `,` | `∴ Fun[…]` 顶层参数分界符。设为 `@` 时 `@` 只分参、Prefix 复合停用；建议分参用 `;`，复合用 `@` |
 | `latex-helper.latexPath` | `latex` | latex 可执行文件路径（DVI 模式） |
 | `latex-helper.dvisvgmPath` | `dvisvgm` | dvisvgm 可执行文件路径 |
 | `latex-helper.auxPath` | `./temp` | `.aux` 辅助文件目录（引用检测用） |

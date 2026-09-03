@@ -41,6 +41,18 @@ check('未知名首字母大写', normalizeFnName('foobar'), 'Foobar');
 check('未知名已有驼峰保持', normalizeFnName('MyFunc'), 'MyFunc');
 check('replaceall 编译', compileWolframPseudo('replaceall[x, x->1]'), 'ReplaceAll[x, x->1]');
 
+console.log('== Prefix @ 复合 ==');
+check('Simplify@x', compileWolframPseudo('Simplify@x'), 'Simplify[x]');
+check('simplify @ expand @ expr', compileWolframPseudo('simplify @ expand @ (x+1)^2'),
+    'Simplify[Expand[(x+1)^2]]');
+check('嵌套 Det', compileWolframPseudo('Simplify@Det[{{1,2},{3,4}}]'),
+    'Simplify[Det[{{1,2},{3,4}}]]');
+check('变量头不改写', compileWolframPseudo('f@x'), 'f[x]');
+check('参数内 @ 仍复合', compileWolframPseudo('Simplify[a@b]'), 'Simplify[a[b]]');
+check('分参为 @ 时不当复合', compileWolframPseudo('Collect[a @ b @ c]', { argSeparator: '@' }),
+    'Collect[a, b, c]');
+check('@@ 原样透传（Apply，暂不改写）', compileWolframPseudo('f@@{a, b}'), 'f@@{a, b}');
+
 console.log('== looksLikeLatex / splitTopLevelArgs ==');
 check('frac 是 latex', looksLikeLatex('\\frac{1}{x}'));
 check('列表不是 latex', !looksLikeLatex('{{a,b},{c,d}}'));

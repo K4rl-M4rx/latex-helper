@@ -177,7 +177,7 @@
           "type": "string",
           "default": ",",
           "minLength": 1,
-          "description": "∴ 块伪代码 Fun[…] 顶层参数分界符（默认英文逗号 ,）。可改为 @、;、顿号等；仅在 []/()/{} 外层生效，编译输出仍为 Wolfram 逗号。"
+          "description": "∴ 块伪代码 Fun[…] 顶层参数分界符（默认英文逗号 ,）。可改为 ;、顿号等。若设为 @，则 @ 只用于分参，Prefix 函数复合（Simplify@x）停用；编译输出仍为 Wolfram 逗号。"
         },
         "latex-helper.auxPath": {
           "type": "string",

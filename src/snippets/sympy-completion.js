@@ -32,6 +32,9 @@ const STRUCTURES = [
     { label: 'Expand[$1]', insertSnippet: 'Expand[$1]' },
     { label: 'Factor[$1]', insertSnippet: 'Factor[$1]' },
     { label: 'Simplify[Det[$1]]', insertSnippet: 'Simplify[Det[$1]]' },
+    { label: 'Simplify @ Det[$1]', insertSnippet: 'Simplify @ Det[$1]' },
+    { label: 'Simplify @ Expand @ $1', insertSnippet: 'Simplify @ Expand @ $1' },
+    { label: 'ReplaceAll[$1, $2]', insertSnippet: 'ReplaceAll[$1, $2]' },
     { label: 'Det[{{$1,$2},{$3,$4}}]', insertSnippet: 'Det[{{$1,$2},{$3,$4}}]' },
     { label: 'Det[\\begin{pmatrix}...\\end{pmatrix}]', insertSnippet: 'Det[\\begin{pmatrix}$1&$2\\\\$3&$4\\end{pmatrix}]' },
     { label: '\\frac{$1}{$2}', insertSnippet: '\\frac{$1}{$2}' }

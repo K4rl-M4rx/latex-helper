@@ -2,6 +2,8 @@
  * Wolfram 伪代码编译：∴ Function[args] ∴c 块用。
  * - 函数名不区分大小写：一律 toLowerCase 后查规范名表（见 FN_ALIASES）
  * - 支持嵌套 Fun1[Fun2[…]] 与多参数；顶层分界符可配（默认 ,）
+ * - Prefix `@` 复合：Simplify @ Expand @ expr → Simplify[Expand[expr]]（右结合；
+ *   与 wolframArgSeparator=@ 互斥，分参优先）
  * - 叶子：LaTeX → tex2wolfram；裸函数名走同一张表（simplify → Simplify，不改写变量 x）
  *
  * 为何必须有词表、而不能「任意单词小写后自动对齐 Wolfram」：
@@ -183,8 +185,21 @@ function looksLikeLatex(s) {
  * @returns {string[]}
  */
 function splitTopLevelArgs(s, separator) {
-    const sep = normalizeArgSeparator(separator);
-    const args = [];
+    return splitTopLevelBy(s, normalizeArgSeparator(separator), { asArgs: true });
+}
+
+/**
+ * 顶层按分隔符切开（方括号/花括号/圆括号内不拆）。
+ * @param {string} s
+ * @param {string} sep
+ * @param {{ asArgs?: boolean, singleAt?: boolean }} [opts]
+ *   asArgs：空段丢弃（参数列表）；singleAt：仅拆单独的 Prefix `@`，跳过 @@ / @@@ / /@ 
+ * @returns {string[]}
+ */
+function splitTopLevelBy(s, sep, opts) {
+    const asArgs = Boolean(opts && opts.asArgs);
+    const singleAt = Boolean(opts && opts.singleAt);
+    const parts = [];
     let depthSq = 0;
     let depthCurly = 0;
     let depthParen = 0;
@@ -201,13 +216,55 @@ function splitTopLevelArgs(s, separator) {
             depthSq === 0 && depthCurly === 0 && depthParen === 0 &&
             s.startsWith(sep, i)
         ) {
-            args.push(s.slice(start, i).trim());
+            if (singleAt) {
+                const prev = i > 0 ? s[i - 1] : '';
+                const next = i + sep.length < s.length ? s[i + sep.length] : '';
+                // 跳过 @@、@@@、/@、//@（Apply / Map 族，暂不实现）
+                if (prev === '@' || next === '@' || prev === '/') {
+                    continue;
+                }
+            }
+            parts.push(s.slice(start, i).trim());
             start = i + sep.length;
             i += sep.length - 1;
         }
     }
-    args.push(s.slice(start).trim());
-    return args.filter(a => a.length > 0);
+    parts.push(s.slice(start).trim());
+    return asArgs ? parts.filter(a => a.length > 0) : parts;
+}
+
+/**
+ * 顶层 Prefix `@` 分段：f @ g @ x → ['f','g','x']（右结合编成 f[g[x]]）。
+ * 与参数分界符 `@` 互斥：argSeparator 为 `@` 时不启用。
+ * @param {string} s
+ * @returns {string[] | null} 无 Prefix `@` 时返回 null
+ */
+function splitPrefixAt(s) {
+    const parts = splitTopLevelBy(s, '@', { singleAt: true });
+    if (parts.length < 2) return null;
+    if (parts.some(p => !p)) {
+        throw new Error('empty operand around @ (@@ / @@@ not supported yet)');
+    }
+    return parts;
+}
+
+/**
+ * Prefix 复合：head @ arg → head[arg]（head 已是调用则 head[arg]）。
+ * @param {string} headCompiled
+ * @param {string} argCompiled
+ * @returns {string}
+ */
+function applyPrefix(headCompiled, argCompiled) {
+    const h = headCompiled.trim();
+    // 纯函数名 / 符号：在别名表内才规范大小写，避免 f@x → F[x]
+    if (/^[A-Za-z][A-Za-z0-9]*$/.test(h)) {
+        const fn = Object.prototype.hasOwnProperty.call(FN_ALIASES, h.toLowerCase())
+            ? FN_ALIASES[h.toLowerCase()]
+            : h;
+        return fn + '[' + argCompiled + ']';
+    }
+    // 已是 Fun[...] 或其它表达式：Wolfram 允许 expr[arg]
+    return h + '[' + argCompiled + ']';
 }
 
 /**
@@ -244,6 +301,20 @@ function compileWolframPseudo(input, options) {
     const s = String(input || '').trim();
     if (!s) throw new Error('empty wolfram pseudo expression');
     const argSeparator = normalizeArgSeparator(options && options.argSeparator);
+
+    // Prefix `@`：Simplify @ Expand @ expr → Simplify[Expand[expr]]（右结合）
+    // 若用户把参数分界符设成 `@`，则让位给分参，不再当复合算子
+    if (argSeparator !== '@') {
+        const atParts = splitPrefixAt(s);
+        if (atParts) {
+            let acc = compileWolframPseudo(atParts[atParts.length - 1], options);
+            for (let i = atParts.length - 2; i >= 0; i--) {
+                const head = compileWolframPseudo(atParts[i], options);
+                acc = applyPrefix(head, acc);
+            }
+            return acc;
+        }
+    }
 
     const nameMatch = /^([A-Za-z][A-Za-z0-9]*)\s*\[/.exec(s);
     if (nameMatch) {
@@ -288,6 +359,9 @@ module.exports = {
     normalizeArgSeparator,
     looksLikeLatex,
     splitTopLevelArgs,
+    splitTopLevelBy,
+    splitPrefixAt,
+    applyPrefix,
     compileWolframPseudo,
     buildPseudoWolframScript
 };

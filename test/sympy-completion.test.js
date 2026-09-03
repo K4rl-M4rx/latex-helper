@@ -57,6 +57,7 @@ check('FUNCTIONS 含 Simplify', FUNCTIONS.some(f => f.label.startsWith('Simplify
 check('FUNCTIONS 含 Det', FUNCTIONS.some(f => f.label.startsWith('Det')));
 check('FUNCTIONS insertSnippet 无 ∴ 后缀', FUNCTIONS.every(f => !(f.insertSnippet || '').includes('∴')));
 check('STRUCTURES 含嵌套模板', STRUCTURES.some(s => s.label.includes('Simplify[Det')));
+check('STRUCTURES 含 @ 复合', STRUCTURES.some(s => (s.insertSnippet || '').includes('Simplify @')));
 check('STRUCTURES insertSnippet 用 Fun[$1]',
     STRUCTURES.some(s => (s.insertSnippet || '').includes('Simplify[$1]')));
 
